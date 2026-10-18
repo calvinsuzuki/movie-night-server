@@ -11,7 +11,7 @@ import (
 // Ticket states a viewer page can see while asking to join.
 const (
 	Pending  = "pending"  // waiting for the sharer
-	Allowed  = "allowed"  // may connect once
+	Allowed  = "allowed"  // may connect (again, after a dropped connection)
 	Denied   = "denied"   // the sharer said no
 	Expired  = "expired"  // nobody answered in time, or the pass wasn't used
 	Watching = "watching" // connected
@@ -49,7 +49,8 @@ type ticket struct {
 }
 
 // Lobby holds join requests for one share session. Nobody connects without
-// a ticket the sharer allowed, and each ticket is good for one connection.
+// a ticket the sharer allowed, and each ticket is good for one connection at
+// a time.
 type Lobby struct {
 	mu      sync.Mutex
 	token   string // the secret part of the link; "" while not sharing
@@ -229,8 +230,10 @@ func (l *Lobby) Viewer(id string) (string, bool) {
 // Kicked marks the viewer's ticket so their page doesn't silently ask again.
 func (l *Lobby) Kicked(viewer string) { l.ended(viewer, Kicked) }
 
-// Gone records that a viewer's connection ended.
-func (l *Lobby) Gone(viewer string) { l.ended(viewer, Left) }
+// Gone records that a viewer's connection ended. The ticket becomes a fresh
+// pass for allowedTTL, so a page whose network blipped reconnects without the
+// sharer having to let them in again.
+func (l *Lobby) Gone(viewer string) { l.ended(viewer, Allowed) }
 
 func (l *Lobby) ended(viewer, state string) {
 	l.mu.Lock()

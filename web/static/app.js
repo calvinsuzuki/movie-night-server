@@ -211,10 +211,12 @@ async function lost(everConnected) {
   if (!everConnected) {
     return notice("Couldn't reach the host directly. Their network (or yours) blocks direct connections; ask them to set up a relay server in Movie night.");
   }
-  const state = await ticketState();
+  // Wait for the host's side to let go of the old connection too.
+  const state = await ticketState('watching');
   if (mine !== askToken) return;
   if (state === 'kicked' || state === 'stopped') return ended(state);
-  // A network blip: ask to be let back in (the host has to allow it again).
+  // A network blip: our ticket is good again for a minute, so just reconnect.
+  if (state === 'allowed') return connect(mine);
   ask('Connection dropped. Asking the host to let you back in…');
 }
 
@@ -298,10 +300,11 @@ watchersBtn.addEventListener('click', (e) => {
 });
 document.addEventListener('click', () => { watchersEl.classList.remove('open'); watchersBtn.setAttribute('aria-expanded', 'false'); });
 
-// What the host's side says about our ticket ('left' if we can't tell).
-async function ticketState() {
+// What the host's side says about our ticket ('left' if we can't tell),
+// waiting a while for it to change if it is still `while`.
+async function ticketState(while_ = '') {
   try {
-    const r = await fetch(`${base}join/${ticket}`, { cache: 'no-store' });
+    const r = await fetch(`${base}join/${ticket}` + (while_ ? `?while=${while_}` : ''), { cache: 'no-store' });
     return r.status === 404 ? 'stopped' : (await r.json()).state;
   } catch { return 'left'; }
 }

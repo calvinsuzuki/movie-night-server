@@ -33,6 +33,11 @@ func TestLobbyApproval(t *testing.T) {
 		t.Fatal("ticket worked twice")
 	}
 	l.Attach(tk, "v1")
+	l.Gone("v1") // a dropped connection may come back on the same ticket
+	if _, err := l.Use(tk); err != nil {
+		t.Fatalf("rejoin after a drop: %v", err)
+	}
+	l.Attach(tk, "v1")
 	l.Kicked("v1")
 	l.Gone("v1") // the hub reports the closed connection afterwards
 	if s := l.State(tk); s != Kicked {
