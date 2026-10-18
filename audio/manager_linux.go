@@ -23,6 +23,10 @@ import (
 // PipeWire's pulse server (Ubuntu 22.04+).
 const sinkName = "movienight"
 
+// AlertClient is the PulseAudio client name of Movie night's own alert
+// sounds, which are never shared.
+const AlertClient = "Movie night alerts"
+
 type Manager struct {
 	mu        sync.Mutex
 	policy    Policy
@@ -126,7 +130,8 @@ func (m *Manager) reconcile() {
 	defer m.mu.Unlock()
 	running := map[string]string{}
 	for _, in := range inputs {
-		if in.module == m.loopModID || strings.Contains(in.driver, "module-loopback") {
+		// Our own alert sounds stay on your speakers only.
+		if in.module == m.loopModID || strings.Contains(in.driver, "module-loopback") || in.name == AlertClient {
 			continue
 		}
 		key := in.binary

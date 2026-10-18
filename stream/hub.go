@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,46 +52,47 @@ func TailscaleIP() net.IP {
 	return nil
 }
 
+// Viewer is a connected friend, as shown in the tray.
+type Viewer struct {
+	ID, Name string
+	Since    time.Time // when the video started flowing
+}
+
+type peer struct {
+	pc        *webrtc.PeerConnection
+	name      string
+	connected time.Time
+	dropTimer *time.Timer
+}
+
+// ICEConfig is what both ends use to find a path to each other: STUN servers
+// to learn public addresses and, optionally, a TURN relay.
+type ICEConfig struct {
+	Servers   []webrtc.ICEServer
+	RelayOnly bool // hide the sharer's IP: media only goes through the relay
+}
+
 type Hub struct {
-	api          *webrtc.API
 	video, audio *webrtc.TrackLocalStaticRTP
 
 	mu    sync.Mutex
-	peers map[string]*webrtc.PeerConnection
+	api   *webrtc.API
+	udp   net.PacketConn
+	ice   ICEConfig
+	peers map[string]*peer
+	ver   uint64        // bumps whenever someone starts or stops watching
+	verCh chan struct{} // closed (and replaced) on every bump
 
-	// OnViewers is called whenever the number of connected viewers changes.
-	OnViewers func(n int)
+	// OnViewers is called whenever the set of connected viewers changes.
+	OnViewers func()
+	// OnLeave is called once when a viewer's connection is gone for good.
+	OnLeave func(id string)
 }
 
-// NewHub listens for ICE on a single UDP port (one firewall rule) bound to
-// listenIP. With an unspecified listenIP, only Tailscale addresses are offered
-// unless allowLAN is set.
-func NewHub(listenIP net.IP, icePort int, allowLAN bool) (*Hub, error) {
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		return nil, err
-	}
-	// NACK retransmission, RTCP reports, PLI handling.
-	reg := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(m, reg); err != nil {
-		return nil, err
-	}
-
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: listenIP, Port: icePort})
-	if err != nil {
-		return nil, fmt.Errorf("ICE port: %w", err)
-	}
-	se := webrtc.SettingEngine{}
-	se.SetICEUDPMux(webrtc.NewICEUDPMux(nil, udp))
-	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
-	if !allowLAN {
-		se.SetIPFilter(IsTailnet)
-	}
-
-	h := &Hub{
-		api:   webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se)),
-		peers: map[string]*webrtc.PeerConnection{},
-	}
+// NewHub creates the shared video/audio tracks. Call Listen before Answer.
+func NewHub() (*Hub, error) {
+	h := &Hub{peers: map[string]*peer{}, verCh: make(chan struct{})}
+	var err error
 	// Constrained baseline: the profile every browser (incl. iOS) hardware-decodes.
 	h.video, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeH264, ClockRate: 90000,
@@ -106,6 +109,66 @@ func NewHub(listenIP net.IP, icePort int, allowLAN bool) (*Hub, error) {
 		return nil, err
 	}
 	return h, nil
+}
+
+// Virtual adapters whose addresses no friend can reach.
+var skipInterfaces = []string{"vethernet", "wsl", "docker", "virtualbox", "vmware", "hyper-v", "loopback", "br-", "veth"}
+
+// Listen (re)opens the single UDP port ICE uses (one firewall rule), dropping
+// every viewer. With tailnetOnly only Tailscale addresses are offered;
+// otherwise LAN and public (STUN) addresses are, minus virtual adapters.
+func (h *Hub) Listen(listenIP net.IP, icePort int, tailnetOnly bool) error {
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterDefaultCodecs(); err != nil {
+		return err
+	}
+	// NACK retransmission, RTCP reports, PLI handling.
+	reg := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(m, reg); err != nil {
+		return err
+	}
+
+	h.Close()
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: listenIP, Port: icePort})
+	if err != nil {
+		return fmt.Errorf("ICE port %d: %w", icePort, err)
+	}
+	se := webrtc.SettingEngine{}
+	se.SetICEUDPMux(webrtc.NewICEUDPMux(nil, udp))
+	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	if tailnetOnly {
+		se.SetIPFilter(IsTailnet)
+	} else {
+		se.SetInterfaceFilter(func(name string) bool {
+			name = strings.ToLower(name)
+			for _, s := range skipInterfaces {
+				if strings.Contains(name, s) {
+					return false
+				}
+			}
+			return true
+		})
+	}
+
+	h.mu.Lock()
+	h.udp = udp
+	h.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se))
+	h.mu.Unlock()
+	return nil
+}
+
+// SetICE sets the STUN/TURN servers for viewers joining from now on.
+func (h *Hub) SetICE(c ICEConfig) {
+	h.mu.Lock()
+	h.ice = c
+	h.mu.Unlock()
+}
+
+// ICE returns the current STUN/TURN servers (browsers get the same list).
+func (h *Hub) ICE() ICEConfig {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.ice
 }
 
 // Forward reads ffmpeg's RTP from 127.0.0.1:port and writes it to every viewer.
@@ -197,8 +260,18 @@ func readerOf(c net.PacketConn) io.Reader { return packetReader{c} }
 
 // Answer creates a viewer connection for a browser's SDP offer and returns the
 // answer (with all candidates; no trickle ICE) plus the viewer's id.
-func (h *Hub) Answer(offerSDP string) (id, answerSDP string, err error) {
-	pc, err := h.api.NewPeerConnection(webrtc.Configuration{})
+func (h *Hub) Answer(offerSDP, name string) (id, answerSDP string, err error) {
+	h.mu.Lock()
+	api, ice := h.api, h.ice
+	h.mu.Unlock()
+	if api == nil {
+		return "", "", errors.New("not listening")
+	}
+	cfg := webrtc.Configuration{ICEServers: ice.Servers}
+	if ice.RelayOnly {
+		cfg.ICETransportPolicy = webrtc.ICETransportPolicyRelay
+	}
+	pc, err := api.NewPeerConnection(cfg)
 	if err != nil {
 		return "", "", err
 	}
@@ -236,56 +309,139 @@ func (h *Hub) Answer(offerSDP string) (id, answerSDP string, err error) {
 	<-gathered
 
 	id = newID()
+	p := &peer{pc: pc, name: name}
 	h.mu.Lock()
-	h.peers[id] = pc
+	h.peers[id] = p
 	h.mu.Unlock()
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		h.mu.Lock()
+		if p.dropTimer != nil {
+			p.dropTimer.Stop()
+			p.dropTimer = nil
+		}
+		switch s {
+		case webrtc.PeerConnectionStateConnected:
+			if p.connected.IsZero() {
+				p.connected = time.Now()
+				h.bump()
+			}
+		case webrtc.PeerConnectionStateDisconnected:
+			// Give a flaky network 10 s to come back before cutting them off.
+			p.dropTimer = time.AfterFunc(10*time.Second, func() { h.Remove(id) })
+		}
+		h.mu.Unlock()
+		log.Printf("viewer %s (%s): %s", id, name, s)
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			h.Remove(id)
-		}
-		log.Printf("viewer %s: %s (%d watching)", id, s, h.Viewers())
-		if h.OnViewers != nil {
-			h.OnViewers(h.Viewers())
+		} else if h.OnViewers != nil {
+			h.OnViewers()
 		}
 	})
 	return id, pc.LocalDescription().SDP, nil
 }
 
+// Remove closes a viewer's connection completely and reports whether the
+// viewer existed.
 func (h *Hub) Remove(id string) bool {
 	h.mu.Lock()
-	pc, ok := h.peers[id]
+	p, ok := h.peers[id]
 	delete(h.peers, id)
-	h.mu.Unlock()
-	if ok {
-		pc.Close()
+	if ok && p.dropTimer != nil {
+		p.dropTimer.Stop()
 	}
-	return ok
+	if ok && !p.connected.IsZero() {
+		h.bump()
+	}
+	h.mu.Unlock()
+	if !ok {
+		return false
+	}
+	p.pc.Close()
+	log.Printf("viewer %s (%s) left (%d watching)", id, p.name, h.Count())
+	if h.OnLeave != nil {
+		h.OnLeave(id)
+	}
+	if h.OnViewers != nil {
+		h.OnViewers()
+	}
+	return true
 }
 
-// Viewers counts viewers that are currently connected.
-func (h *Hub) Viewers() int {
+// Viewers lists the connected viewers, longest-watching first.
+func (h *Hub) Viewers() []Viewer {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	n := 0
-	for _, pc := range h.peers {
-		if pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
-			n++
+	var vs []Viewer
+	for id, p := range h.peers {
+		if p.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+			vs = append(vs, Viewer{ID: id, Name: p.name, Since: p.connected})
 		}
 	}
-	return n
+	sort.Slice(vs, func(i, j int) bool { return vs[i].Since.Before(vs[j].Since) })
+	return vs
 }
 
-func (h *Hub) Close() {
+// bump records a change in who's watching; h.mu must be held.
+func (h *Hub) bump() {
+	h.ver++
+	close(h.verCh)
+	h.verCh = make(chan struct{})
+}
+
+// WaitWatchers returns the watcher list version once it differs from since,
+// or after timeout (long polling for the viewer page's watcher list).
+func (h *Hub) WaitWatchers(since uint64, timeout time.Duration) uint64 {
+	h.mu.Lock()
+	ver, ch := h.ver, h.verCh
+	h.mu.Unlock()
+	if ver != since {
+		return ver
+	}
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for id, pc := range h.peers {
-		pc.Close()
-		delete(h.peers, id)
+	return h.ver
+}
+
+// Count is the number of connected viewers.
+func (h *Hub) Count() int { return len(h.Viewers()) }
+
+// CloseAll disconnects every viewer.
+func (h *Hub) CloseAll() {
+	h.mu.Lock()
+	ids := make([]string, 0, len(h.peers))
+	for id := range h.peers {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	for _, id := range ids {
+		h.Remove(id)
+	}
+}
+
+// Close disconnects everyone and frees the ICE port.
+func (h *Hub) Close() {
+	h.CloseAll()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.udp != nil {
+		h.udp.Close()
+		h.udp, h.api = nil, nil
 	}
 }
 
 func newID() string {
 	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// newToken is an unguessable 128-bit id for links and tickets.
+func newToken() string {
+	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }

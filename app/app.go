@@ -1,5 +1,6 @@
 // Package app is the Movie night controller: it owns the config, the WebRTC
-// hub/web server and the ffmpeg pipelines, and is driven by the tray menu.
+// hub/web server, the tunnel and the ffmpeg pipelines, and is driven by the
+// tray menu.
 package app
 
 import (
@@ -14,9 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"movienight/assets"
 	"movienight/audio"
 	"movienight/capture"
 	"movienight/stream"
+	"movienight/tunnel"
 	"movienight/web"
 )
 
@@ -32,32 +35,44 @@ type App struct {
 
 	mu       sync.Mutex
 	cfg      Config
-	sharing  bool
-	url      string
+	sharing  bool           // a share session is open (link works)
+	paused   bool           // session open, but the picture is frozen
+	base     string         // public address of the web server ("" until known)
 	encoders map[int]string // detected encoder per GPU adapter
 	encoder  string
 	status   string // last problem, shown in the tray
 
 	ctx         context.Context
 	hub         *stream.Hub
+	lobby       *stream.Lobby
+	handler     http.Handler
 	srv         *http.Server
+	localURL    string // where cloudflared forwards to
+	netCancel   context.CancelFunc
+	shareCancel context.CancelFunc
+	ice         iceCache
 	audio       *audio.Manager
 	videoCancel context.CancelFunc
 	audioCancel context.CancelFunc
 	pipelines   sync.WaitGroup
+
+	// OnRequest is called when someone asks to watch (the tray notifies).
+	OnRequest func(stream.Request)
 
 	changed chan struct{}
 }
 
 // State is a snapshot for the tray.
 type State struct {
-	Sharing bool
-	Viewers int
-	URL     string
-	Encoder string
-	Status  string
-	Config  Config
-	Apps    []audio.AppStatus
+	Sharing  bool
+	Paused   bool
+	Viewers  []stream.Viewer
+	Requests []stream.Request
+	URL      string
+	Encoder  string
+	Status   string
+	Config   Config
+	Apps     []audio.AppStatus
 }
 
 func New(ffmpeg, cfgPath string) (*App, error) {
@@ -85,9 +100,8 @@ func (a *App) notify() {
 	}
 }
 
-// Start begins watching audio apps and serving viewers. Viewers are only
-// served on the Tailscale address (unless AllowLAN), so if Tailscale isn't
-// connected yet it waits for it instead of exposing the screen to the LAN.
+// Start begins watching audio apps and gets the network side ready. Nothing
+// is shared, and no link exists, until StartSharing.
 func (a *App) Start(ctx context.Context) error {
 	a.ctx = ctx
 	cfg := a.Config()
@@ -100,66 +114,23 @@ func (a *App) Start(ctx context.Context) error {
 		go m.Run(ctx)
 	}
 
-	listenIP := stream.TailscaleIP()
-	if listenIP == nil && !cfg.AllowLAN {
-		log.Printf("waiting for Tailscale (%s)", TailscaleState())
-		a.setStatus(tailscaleStatus(TailscaleState()))
-		go func() {
-			t := time.NewTicker(3 * time.Second)
-			defer t.Stop()
-			for listenIP == nil {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-				}
-				if listenIP = stream.TailscaleIP(); listenIP == nil {
-					a.setStatus(tailscaleStatus(TailscaleState())) // e.g. installed meanwhile
-				}
-			}
-			a.setStatus("")
-			if err := a.serve(ctx, listenIP); err != nil {
-				log.Print(err)
-				a.setStatus(err.Error())
-			}
-		}()
-		return nil
-	}
-	return a.serve(ctx, listenIP)
-}
-
-// serve brings up the WebRTC hub and web server, then starts sharing.
-func (a *App) serve(ctx context.Context, tsIP net.IP) error {
-	cfg := a.Config()
-	listenIP, host := tsIP, "localhost"
-	if tsIP != nil {
-		host = tsIP.String()
-	}
-	if cfg.AllowLAN {
-		listenIP = net.IPv4zero
-	}
-
-	hub, err := stream.NewHub(listenIP, cfg.ICEPort, cfg.AllowLAN)
+	hub, err := stream.NewHub()
 	if err != nil {
-		return fmt.Errorf("%w (is Movie night already running?)", err)
+		return err
 	}
-	hub.OnViewers = func(int) { a.notify() }
-
-	ln, err := net.Listen("tcp", net.JoinHostPort(listenIP.String(), strconv.Itoa(cfg.Port)))
-	if err != nil {
-		hub.Close()
-		return fmt.Errorf("can't open port %d: %w", cfg.Port, err)
+	lobby := stream.NewLobby()
+	lobby.SetApproval(cfg.RequireApproval)
+	lobby.OnChange = a.notify
+	lobby.OnRequest = func(r stream.Request) {
+		log.Printf("%s (%s) asks to watch", r.Name, r.IP)
+		if a.OnRequest != nil {
+			a.OnRequest(r)
+		}
 	}
-	mux := http.NewServeMux()
-	mux.Handle("GET /", http.FileServerFS(web.Files()))
-	hub.Register(mux)
-	srv := &http.Server{Handler: mux}
-	go srv.Serve(ln)
-
-	a.mu.Lock()
-	a.hub, a.srv = hub, srv
-	a.url = fmt.Sprintf("http://%s:%d", host, cfg.Port)
-	a.mu.Unlock()
+	hub.OnViewers = a.notify
+	hub.OnLeave = lobby.Gone
+	a.hub, a.lobby = hub, lobby
+	a.handler = stream.Handler(hub, lobby, web.Files(), map[string][]byte{"join-sound.wav": assets.JoinSound})
 
 	go a.forward(ctx, videoPort, "video")
 	go a.forward(ctx, audioPort, "audio")
@@ -167,9 +138,87 @@ func (a *App) serve(ctx context.Context, tsIP net.IP) error {
 	if runtime.GOOS == "linux" && os.Getenv("XDG_SESSION_TYPE") == "wayland" {
 		a.setStatus("Wayland session: screen capture needs \"Ubuntu on Xorg\"")
 	}
-	log.Printf("viewers open: %s", a.URL())
-	a.StartSharing()
+	return a.startNetwork()
+}
+
+// startNetwork opens the ICE port and the web server for the configured
+// network mode.
+func (a *App) startNetwork() error {
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.mu.Lock()
+	a.netCancel = cancel
+	a.mu.Unlock()
+	cfg := a.Config()
+
+	if cfg.Network == NetInternet {
+		// Reachable only through the tunnel: nothing listens on the LAN.
+		if err := a.hub.Listen(net.IPv4zero, cfg.ICEPort, false); err != nil {
+			return fmt.Errorf("%w (is Movie night already running?)", err)
+		}
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		a.serveOn(ln, "")
+		return nil
+	}
+
+	// Tailscale only: wait for a tailnet address rather than exposing the LAN.
+	go func() {
+		ip := stream.TailscaleIP()
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for ip == nil {
+			a.setStatus(tailscaleStatus(TailscaleState()))
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			ip = stream.TailscaleIP()
+		}
+		if err := a.hub.Listen(ip, cfg.ICEPort, true); err != nil {
+			a.setStatus(err.Error())
+			return
+		}
+		ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), strconv.Itoa(cfg.Port)))
+		if err != nil {
+			a.setStatus(fmt.Sprintf("Can't open port %d: %v", cfg.Port, err))
+			return
+		}
+		if ctx.Err() != nil {
+			ln.Close()
+			return
+		}
+		a.setStatus("")
+		a.serveOn(ln, fmt.Sprintf("http://%s:%d", ip, cfg.Port))
+	}()
 	return nil
+}
+
+func (a *App) serveOn(ln net.Listener, base string) {
+	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second}
+	go srv.Serve(ln)
+	a.mu.Lock()
+	a.srv, a.localURL, a.base = srv, "http://"+ln.Addr().String(), base
+	a.mu.Unlock()
+	log.Printf("web server on %s", ln.Addr())
+	a.notify()
+}
+
+func (a *App) stopNetwork() {
+	a.StopSharing()
+	a.mu.Lock()
+	cancel, srv := a.netCancel, a.srv
+	a.netCancel, a.srv, a.base, a.localURL = nil, nil, "", ""
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if srv != nil {
+		srv.Close()
+	}
+	a.hub.Close()
 }
 
 func (a *App) forward(ctx context.Context, port int, kind string) {
@@ -181,9 +230,12 @@ func (a *App) forward(ctx context.Context, port int, kind string) {
 
 func (a *App) setStatus(s string) {
 	a.mu.Lock()
+	changed := a.status != s
 	a.status = s
 	a.mu.Unlock()
-	a.notify()
+	if changed {
+		a.notify()
+	}
 }
 
 func (a *App) Config() Config {
@@ -192,20 +244,38 @@ func (a *App) Config() Config {
 	return a.cfg
 }
 
-// URL is the viewer link, or "" while waiting for Tailscale.
+// ConfigPath is config.json, created with the current settings if missing,
+// for hand edits (relay server).
+func (a *App) ConfigPath() string {
+	if _, err := os.Stat(a.cfgPath); err != nil {
+		saveConfig(a.cfgPath, a.Config())
+	}
+	return a.cfgPath
+}
+
+// URL is the invite link, or "" while not sharing or still connecting.
 func (a *App) URL() string {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.url
+	sharing, base := a.sharing, a.base
+	a.mu.Unlock()
+	token := ""
+	if a.lobby != nil {
+		token = a.lobby.Token()
+	}
+	if !sharing || base == "" || token == "" {
+		return ""
+	}
+	return base + "/s/" + token + "/"
 }
 
 func (a *App) State() State {
 	a.mu.Lock()
-	st := State{Sharing: a.sharing, URL: a.url, Encoder: a.encoder, Status: a.status, Config: a.cfg}
-	hub := a.hub
+	st := State{Sharing: a.sharing, Paused: a.paused, Encoder: a.encoder, Status: a.status, Config: a.cfg}
 	a.mu.Unlock()
-	if hub != nil {
-		st.Viewers = hub.Viewers()
+	st.URL = a.URL()
+	if a.hub != nil {
+		st.Viewers = a.hub.Viewers()
+		st.Requests = a.lobby.Requests()
 	}
 	if a.audio != nil {
 		st.Apps = a.audio.Apps()
@@ -227,25 +297,101 @@ func (a *App) update(fn func(c *Config)) (old, cur Config) {
 	return old, cur
 }
 
+// StartSharing opens a share session: a fresh link (through a new tunnel in
+// internet mode) and the capture pipelines.
 func (a *App) StartSharing() {
 	a.mu.Lock()
 	if a.sharing {
 		a.mu.Unlock()
 		return
 	}
-	a.sharing = true
+	a.sharing, a.paused = true, false
+	// Pick up relay settings edited in config.json since launch.
+	a.cfg.TURN, a.cfg.HideIP = loadConfig(a.cfgPath).TURN, loadConfig(a.cfgPath).HideIP
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.shareCancel = cancel
+	cfg, local := a.cfg, a.localURL
 	a.mu.Unlock()
+
+	a.lobby.Open()
+	if cfg.Network == NetInternet && local == "" {
+		a.setStatus("The web server isn't running; see the log")
+	} else if cfg.Network == NetInternet {
+		go a.keepICEFresh(ctx)
+		a.startTunnel(ctx, local)
+	} else {
+		a.hub.SetICE(stream.ICEConfig{}) // tailnet addresses only
+	}
 	a.startVideo()
 	a.startAudio()
 	a.notify()
 }
 
+func (a *App) startTunnel(ctx context.Context, local string) {
+	bin, err := tunnel.Find()
+	if err != nil {
+		a.setStatus(err.Error())
+		return
+	}
+	t := tunnel.New(bin, local)
+	t.OnURL = func(u string) {
+		a.mu.Lock()
+		if ctx.Err() == nil {
+			a.base = u
+		}
+		a.mu.Unlock()
+		if u != "" {
+			log.Printf("invite link: %s", a.URL())
+		}
+		a.notify()
+	}
+	go t.Run(ctx)
+}
+
+// keepICEFresh sets the STUN/TURN servers and renews minted relay logins.
+func (a *App) keepICEFresh(ctx context.Context) {
+	for {
+		cfg := a.Config()
+		servers, err := a.ice.get(cfg.TURN)
+		if err != nil {
+			log.Print(err)
+			a.setStatus("Relay unavailable: " + err.Error())
+		}
+		a.hub.SetICE(stream.ICEConfig{Servers: servers, RelayOnly: cfg.RelayOnly()})
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
+}
+
+// StopSharing ends the session: everyone is disconnected, waiting friends are
+// told, the link dies and the tunnel closes.
 func (a *App) StopSharing() {
 	a.mu.Lock()
-	a.sharing = false
+	was := a.sharing
+	a.sharing, a.paused = false, false
+	cancel := a.shareCancel
+	a.shareCancel = nil
+	if a.cfg.Network == NetInternet {
+		a.base = ""
+	}
 	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if a.lobby != nil {
+		a.lobby.Close()
+	}
+	if a.hub != nil {
+		a.hub.CloseAll()
+	}
 	a.stopVideo()
 	a.stopAudio()
+	if was {
+		log.Print("stopped sharing")
+	}
 	a.notify()
 }
 
@@ -253,6 +399,84 @@ func (a *App) Sharing() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.sharing
+}
+
+// Pause freezes the picture and sound; viewers stay connected.
+func (a *App) Pause() {
+	a.mu.Lock()
+	if !a.sharing || a.paused {
+		a.mu.Unlock()
+		return
+	}
+	a.paused = true
+	a.mu.Unlock()
+	a.stopVideo()
+	a.stopAudio()
+	a.notify()
+}
+
+func (a *App) Resume() {
+	a.mu.Lock()
+	if !a.sharing || !a.paused {
+		a.mu.Unlock()
+		return
+	}
+	a.paused = false
+	a.mu.Unlock()
+	a.startVideo()
+	a.startAudio()
+	a.notify()
+}
+
+// streaming reports whether the capture pipelines should run.
+func (a *App) streaming() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sharing && !a.paused
+}
+
+func (a *App) Allow(ticket string) { a.lobby.Allow(ticket) }
+func (a *App) Deny(ticket string)  { a.lobby.Deny(ticket) }
+
+// Kick disconnects a viewer; they have to ask (and be allowed) again.
+func (a *App) Kick(id string) {
+	a.lobby.Kicked(id)
+	a.hub.Remove(id)
+}
+
+// SetNetwork switches between the public link and Tailscale-only. Any open
+// session is ended, because the link changes.
+func (a *App) SetNetwork(mode string) {
+	if mode != NetTailscale {
+		mode = NetInternet
+	}
+	if a.Config().Network == mode {
+		return
+	}
+	a.stopNetwork()
+	a.update(func(c *Config) { c.Network = mode })
+	a.setStatus("")
+	if err := a.startNetwork(); err != nil {
+		log.Print(err)
+		a.setStatus(err.Error())
+	}
+}
+
+func (a *App) SetRequireApproval(on bool) {
+	a.update(func(c *Config) { c.RequireApproval = on })
+	a.lobby.SetApproval(on)
+}
+
+// SkipApprovalThisRun lets anyone with the link in without saving that
+// choice (headless mode has no menu to click Allow in).
+func (a *App) SkipApprovalThisRun() { a.lobby.SetApproval(false) }
+
+// SetHideIP sends media only through the relay, for viewers joining from now on.
+func (a *App) SetHideIP(on bool) {
+	_, cur := a.update(func(c *Config) { c.HideIP = on })
+	ice := a.hub.ICE()
+	ice.RelayOnly = cur.RelayOnly()
+	a.hub.SetICE(ice)
 }
 
 func (a *App) SetMonitor(i int) {
@@ -279,7 +503,7 @@ func (a *App) SetBitrate(kbps int) {
 
 func (a *App) SetShareAudio(on bool) {
 	a.update(func(c *Config) { c.ShareAudio = on })
-	if a.Sharing() {
+	if a.streaming() {
 		a.stopAudio()
 		a.startAudio()
 	}
@@ -310,7 +534,7 @@ func (a *App) ToggleApp(name string) {
 }
 
 func (a *App) restartVideo() {
-	if a.Sharing() {
+	if a.streaming() {
 		a.stopVideo()
 		a.startVideo()
 	}
@@ -407,17 +631,10 @@ func (a *App) stopAudio() {
 
 // Shutdown stops everything and restores audio routing.
 func (a *App) Shutdown() {
-	a.StopSharing()
+	if a.hub != nil {
+		a.stopNetwork()
+	}
 	a.pipelines.Wait()
-	a.mu.Lock()
-	srv, hub := a.srv, a.hub
-	a.mu.Unlock()
-	if srv != nil {
-		srv.Close()
-	}
-	if hub != nil {
-		hub.Close()
-	}
 	if a.audio != nil {
 		a.audio.Close()
 	}

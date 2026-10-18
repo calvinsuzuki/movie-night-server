@@ -13,14 +13,46 @@
 
   <div id="overlay">
     <h1 id="brand">Movie night</h1>
-    <button id="join" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-      <span>Join stream</span>
-    </button>
-    <p id="msg"></p>
+
+    <form id="askForm" class="screen">
+      <label for="name">Your name, so the host knows who's asking</label>
+      <input id="name" type="text" maxlength="32" autocomplete="nickname" placeholder="Your name" required>
+      <button id="ask" class="primary" type="submit">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <span>Ask to join</span>
+      </button>
+    </form>
+
+    <div id="waiting" class="screen" hidden>
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="waitText">Waiting for the host to let you in…</p>
+      <button id="cancel" class="secondary" type="button">Cancel</button>
+    </div>
+
+    <div id="notice" class="screen" hidden>
+      <p id="noticeText"></p>
+      <button id="again" class="primary" type="button">Ask again</button>
+    </div>
+
+    <div id="tapToPlay" class="screen" hidden>
+      <button id="play" class="primary" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <span>Start watching</span>
+      </button>
+    </div>
   </div>
 
   <div id="controls">
+    <div id="watchers" hidden>
+      <button id="watchersBtn" type="button" aria-label="Who's watching" aria-expanded="false" aria-controls="watcherList">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg>
+        <span id="watcherCount">0</span>
+      </button>
+      <div id="watcherList" role="tooltip">
+        <p class="title">Watching now</p>
+        <ul id="watcherNames"></ul>
+      </div>
+    </div>
     <button id="mute" type="button" aria-label="Mute">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path id="muteIcon" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
     </button>

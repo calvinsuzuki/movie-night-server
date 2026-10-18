@@ -1,4 +1,5 @@
-# Build output (build.ps1)
+# Build output and downloads (build.ps1)
 dist/
+build/
 *.exe
 *.syso

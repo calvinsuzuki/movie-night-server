@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Movie night · Tailscale guide</title>
+<title>Movie night · How it works</title>
 <style>
   :root {
     color-scheme: light;
@@ -50,97 +50,113 @@
 <div class="wrap">
   <header>
     <img src="{{ICON}}" alt="">
-    <h1>Watch movies with friends, using Tailscale</h1>
+    <h1>Watch movies with your friends, right in their browser</h1>
   </header>
-  <p class="lede">Movie night streams your screen straight to your friends' browsers. Tailscale is the free app that
-    connects your devices privately, so friends can reach your stream from anywhere without you opening ports on your router.
-    It takes about five minutes the first time.</p>
+  <p class="lede">Movie night streams your screen and sound to friends wherever they are. You send a link,
+    they open it in any browser (phone, tablet or computer), and you decide who gets in. Friends don't install anything.</p>
 
   <div class="flow">
-    <span class="box">🍿 Your PC (Movie night)</span> → <span class="box">🔒 Tailscale private network</span> →
-    <span class="box">📱💻 Friends' browsers</span>
+    <span class="box">🍿 You click Start sharing</span> → <span class="box">🔗 Send the link</span> →
+    <span class="box">🙋 Friend asks to join</span> → <span class="box">✓ You allow</span> → <span class="box">📺 They watch</span>
   </div>
 
-  <h2><span class="num">1</span> Set up Tailscale on your PC</h2>
-  <p>You do this once, on the computer that shares the movie.</p>
+  <h2><span class="num">1</span> Start sharing</h2>
+  <p>On the computer that plays the movie.</p>
   <div class="card">
     <ol>
-      <li>Install Tailscale from <a href="https://tailscale.com/download">tailscale.com/download</a>.
-        The Movie night installer offers to do this for you on Windows. On Ubuntu, run:
-        <pre><code>curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up</code></pre></li>
-      <li><strong>Sign in</strong> with an account you already have (Google, Microsoft, GitHub, Apple…).
-        On Windows, click the Tailscale icon in the taskbar tray and choose <em>Log in</em>.
-        Ubuntu prints a link to open instead.</li>
-      <li>Open Movie night's popcorn menu. The status turns from <em>Waiting for Tailscale</em> to
-        <em>Sharing</em>, and a link like <code>http://100.x.y.z:8080</code> appears. That's your viewer link.</li>
+      <li>Click the popcorn icon in the taskbar tray (on Windows it may hide behind the <strong>^</strong> arrow).</li>
+      <li>Pick <strong>Screen</strong> (the monitor where the movie plays) and, if you like, <strong>Quality</strong>.</li>
+      <li>Click <strong>Start sharing</strong>. After a few seconds your link is ready.</li>
+      <li>Click <strong>Copy invite link</strong> and paste it in your group chat.</li>
     </ol>
   </div>
 
-  <h2><span class="num">2</span> Let your friends in</h2>
-  <p>Pick one of these. Both are done on the Tailscale website, in the <a href="https://login.tailscale.com/admin/machines">admin console</a>.</p>
-  <div class="grid">
-    <div class="card">
-      <h3>Share just your PC <span class="tag">Recommended</span></h3>
-      <ol>
-        <li>Open <strong>Machines</strong>.</li>
-        <li>Click the <strong>⋯</strong> menu next to your computer → <strong>Share…</strong></li>
-        <li>Create an invite link and send it to a friend (one link per friend).</li>
-      </ol>
-      <p>Friends keep their own Tailscale account and can only see this one computer.</p>
-    </div>
-    <div class="card">
-      <h3>Invite them to your network</h3>
-      <ol>
-        <li>Open <strong>Users</strong>.</li>
-        <li>Click <strong>Invite users</strong> and enter their e-mail.</li>
-      </ol>
-      <p>Simpler for close friends or family, but they join your whole network, and free plans limit how many users you can have.</p>
-    </div>
-  </div>
-
-  <h2><span class="num">3</span> What each friend does</h2>
-  <p>Send them this list together with the invite link.</p>
-  <div class="card">
-    <ol>
-      <li>Install Tailscale: <strong>iPhone/iPad</strong> from the App Store, <strong>Android</strong> from Google Play,
-        <strong>Windows/Mac/Linux</strong> from <a href="https://tailscale.com/download">tailscale.com/download</a>.</li>
-      <li>Open the invite link you sent, sign in with any account, and accept it.</li>
-      <li>Make sure Tailscale is <strong>connected</strong>: the switch is on in the app (on phones it shows up as a VPN).</li>
-      <li>Open your viewer link (<code>http://100.x.y.z:8080</code>) in a browser and tap <strong>Join stream</strong>.
-        Each friend sets their own volume with the slider.</li>
-    </ol>
-  </div>
-  <div class="tip">💡 Movie night can't share Discord or TeamSpeak sound, so talk there freely while you watch.
-    Friends won't hear themselves echoed back.</div>
-
-  <h2><span class="num">4</span> Movie time</h2>
+  <h2><span class="num">2</span> Let friends in</h2>
+  <p>When a friend opens the link, they type their name and ask to join.</p>
   <div class="card">
     <ul>
-      <li>Popcorn menu → <strong>Copy viewer link</strong> and paste it in your group chat.</li>
-      <li><strong>Screen</strong> picks the monitor, <strong>Quality</strong> picks 480p / 720p / 1080p.
-        If friends see stuttering, lower the quality or bitrate.</li>
-      <li><strong>Sound</strong> lets you share all apps or only the ones you tick (for example just your browser or VLC).</li>
-      <li>Your internet upload is shared between viewers: about 5 Mbps per friend at 1080p.</li>
+      <li>You hear a chime and a popup asks <em>“Alice” wants to watch the movie. Let them in?</em>
+        Click <strong>Yes</strong> or <strong>No</strong>.</li>
+      <li>Missed it? The popcorn icon shows a <strong>blue dot</strong>, and the menu has
+        <strong>✓ Let “Alice” in</strong> / <strong>✗ Deny</strong>. Requests you don't answer expire after 2 minutes.</li>
+      <li>Friends hear a short chime when someone else joins. The corner of their page shows how many are watching;
+        hovering it (or tapping, on a phone) lists everyone's names.</li>
+      <li>Allowed friends see the movie within a couple of seconds. Each one sets their own volume.</li>
+      <li><strong>Watching</strong> lists everyone connected. Click a name to remove them.</li>
+    </ul>
+  </div>
+  <div class="tip">💡 The popup appears on your main screen, so if that's the screen you share, friends see it for a moment too.
+    Prefer no knocking at all? Turn off <strong>Network → Ask me before anyone joins</strong>, and anyone with the
+    link gets straight in.</div>
+
+  <h2><span class="num">3</span> When the movie's over</h2>
+  <div class="card">
+    <ul>
+      <li><strong>Pause picture</strong> freezes the picture and sound; friends stay connected.</li>
+      <li><strong>Stop sharing</strong> disconnects everyone and the link stops working. Next time you get a new link.</li>
+      <li>If a friend closes the page or loses connection, they're fully disconnected and have to ask again.</li>
     </ul>
   </div>
 
-  <h2><span class="num">?</span> If something doesn't work</h2>
+  <h2><span class="num">4</span> Good to know</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Private</h3>
+      <p>The link has a long secret part, and nobody gets in without your OK. Video is encrypted and goes
+        straight from your computer to each friend. It doesn't pass through Cloudflare, which only carries the page and the
+        "can I join?" handshake.</p>
+    </div>
+    <div class="card">
+      <h3>Your internet upload</h3>
+      <p>Each friend gets their own copy of the stream: about 5 Mbps per friend at 1080p, 3 Mbps at 720p.
+        If friends see stuttering, lower <strong>Quality</strong>.</p>
+    </div>
+    <div class="card">
+      <h3>Voice chat</h3>
+      <p>Discord and TeamSpeak sound is never shared, so talk there freely while you watch; friends won't hear themselves echoed back.</p>
+    </div>
+  </div>
+
+  <h2><span class="num">5</span> If a friend can't connect</h2>
+  <p>Most home and mobile connections work directly. Some (strict office or school Wi-Fi, a few mobile carriers and internet
+    providers) block direct connections, and the friend sees <em>"Couldn't reach the host directly"</em>.</p>
+  <div class="card">
+    <h3>Add a relay server (TURN)</h3>
+    <p>A relay passes the video along for those friends. Set one up once:</p>
+    <ol>
+      <li>Get relay details: either a Cloudflare <strong>TURN key</strong> (Cloudflare dashboard → Realtime → TURN;
+        free allowance, then pay per GB) or your own <a href="https://github.com/coturn/coturn">coturn</a> server.</li>
+      <li>Popcorn menu → <strong>Network → Relay server settings…</strong> opens <code>config.json</code>. Fill in the
+        <code>"turn"</code> section, for Cloudflare:
+        <pre><code>"turn": { "cloudflareKeyId": "…", "cloudflareApiToken": "…" }</code></pre>
+        or for your own server:
+        <pre><code>"turn": { "urls": ["turn:relay.example.com:3478"], "username": "…", "credential": "…" }</code></pre></li>
+      <li>Save the file, then <strong>Stop sharing</strong> and <strong>Start sharing</strong> again.</li>
+    </ol>
+    <p>With a relay you can also turn on <strong>Network → Hide my IP</strong>: video then always goes through the relay, so
+      friends never see your internet address.</p>
+  </div>
+
+  <h2><span class="num">?</span> Other problems</h2>
   <div class="card">
     <ul>
-      <li><strong>The link doesn't load:</strong> Tailscale must be connected on <em>both</em> your PC and the friend's device,
-        and Movie night must say <em>Sharing</em>.</li>
-      <li><strong>Laggy or blurry:</strong> on your PC run <code>tailscale ping &lt;friend's device&gt;</code>.
-        If it says <em>via DERP</em>, the connection is going through a slower relay. Restarting Tailscale on both sides
-        or trying another network often fixes it. Lowering Quality also helps.</li>
-      <li><strong>No sound for a friend:</strong> they should tap the page once, check the volume slider, and on iPhone
-        turn off silent mode.</li>
-      <li><strong>Windows asked about the firewall:</strong> allow Movie night (the installer normally does this).</li>
+      <li><strong>The link says it isn't active:</strong> you stopped sharing or restarted Movie night. Send the new link.</li>
+      <li><strong>"Creating your link…" never finishes:</strong> check your internet connection; a firewall or antivirus may be
+        blocking <code>cloudflared</code>, which Movie night uses to create links.</li>
+      <li><strong>No sound for a friend:</strong> they should check the volume slider, and on iPhone turn off silent mode.
+        If the page shows <em>Start watching</em>, they tap it once.</li>
+      <li><strong>Windows asked about the firewall:</strong> allow Movie night, which lets video reach friends directly
+        (the installer normally does this).</li>
       <li><strong>Ubuntu shows a black screen:</strong> log out and choose <em>Ubuntu on Xorg</em> with the ⚙ button on the login screen.</li>
     </ul>
   </div>
 
-  <footer>You can open this guide again any time from the popcorn menu → <em>Tailscale guide</em>.</footer>
+  <h2><span class="num">+</span> Tailscale mode (optional)</h2>
+  <p>Already use <a href="https://tailscale.com">Tailscale</a> with your friends? <strong>Network → Tailscale only</strong>
+    serves the stream on your tailnet address instead of a public link, so only devices on your Tailscale network can even
+    ask to join. Everything else works the same.</p>
+
+  <footer>Open this guide again any time from the popcorn menu → <em>How it works</em>.</footer>
 </div>
 </body>
 </html>

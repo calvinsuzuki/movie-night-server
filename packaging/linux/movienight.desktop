@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
 Name=Movie night
-Comment=Share your screen with friends on your Tailscale network
+Comment=Watch movies with your friends, right in their browser
 Exec=movienight
 Icon=movienight
 Terminal=false
 Categories=AudioVideo;Video;Network;
-Keywords=screen;share;stream;movie;tailscale;
+Keywords=screen;share;stream;movie;watch party;
 StartupNotify=false

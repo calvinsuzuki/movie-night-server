@@ -8,9 +8,10 @@ priority: optional
 maintainer: calvinsuzuki <calvinsuzuki@localhost>
 vendor: calvinsuzuki
 description: |
-  Share one monitor and selected apps' sound with friends on your Tailscale
-  network. Friends watch in any browser; the sharer controls it from the tray.
-homepage: https://tailscale.com
+  Watch movies with your friends, right in their browser. Share one monitor
+  and selected apps' sound through a private invite link; you let each friend
+  in from the tray, and video goes directly to them.
+homepage: https://github.com/calvinsuzuki/movie-night-server
 license: Proprietary
 depends:
   - ffmpeg
@@ -22,6 +23,10 @@ recommends:
 contents:
   - src: dist/linux/movienight
     dst: /usr/bin/movienight
+    file_info:
+      mode: 0755
+  - src: dist/linux/cloudflared
+    dst: /usr/lib/movienight/cloudflared
     file_info:
       mode: 0755
   - src: packaging/linux/movienight.desktop

@@ -277,14 +277,21 @@ func main() {
 	drawPopcorn(c)
 	drawBucket(c)
 
+	// "Someone wants to watch": a blue dot in the top-right corner.
+	badged := newCanvas(S, S)
+	copy(badged.px, c.px)
+	badged.circle(800, 224, 224, rgba{1, 1, 1, 1})
+	badged.circle(800, 224, 176, rgba{0.13, 0.47, 0.95, 1})
+
 	out := "assets"
 	must(os.MkdirAll(out, 0o755))
 	sizes := []int{16, 20, 24, 32, 40, 48, 64, 128, 256}
-	var color, gray []*image.NRGBA
+	var color, gray, badge []*image.NRGBA
 	for _, s := range sizes {
 		img := downscale(c, s)
 		color = append(color, img)
 		gray = append(gray, grayscale(img))
+		badge = append(badge, downscale(badged, s))
 	}
 	for i, s := range sizes {
 		if s == 48 || s == 128 || s == 256 {
@@ -293,12 +300,14 @@ func main() {
 		if s == 64 {
 			must(os.WriteFile(filepath.Join(out, "tray.png"), pngBytes(color[i]), 0o644))
 			must(os.WriteFile(filepath.Join(out, "tray-paused.png"), pngBytes(gray[i]), 0o644))
+			must(os.WriteFile(filepath.Join(out, "tray-request.png"), pngBytes(badge[i]), 0o644))
 		}
 	}
 	writeICO(filepath.Join(out, "icon.ico"), color)
 	// Tray icons only need the small sizes.
 	writeICO(filepath.Join(out, "tray.ico"), color[:6])
 	writeICO(filepath.Join(out, "tray-paused.ico"), gray[:6])
+	writeICO(filepath.Join(out, "tray-request.ico"), badge[:6])
 	log.Printf("wrote icons to %s/", out)
 }
 

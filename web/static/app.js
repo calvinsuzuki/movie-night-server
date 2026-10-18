@@ -1,9 +1,12 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const stage = $('stage'), video = $('video'), overlay = $('overlay'), msg = $('msg');
+const stage = $('stage'), video = $('video'), overlay = $('overlay');
 const vol = $('vol'), volLabel = $('volLabel'), muteBtn = $('mute'), stateEl = $('state');
-const statsEl = $('stats');
+const statsEl = $('stats'), nameInput = $('name');
+
+// Everything lives under /s/<token>/, so the link stops working when the host stops sharing.
+const base = location.pathname.replace(/[^/]*$/, '');
 
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -12,7 +15,8 @@ const store = {
 
 let volume = store.get('volume', 80);
 let muted = store.get('muted', false);
-let pc = null, resource = null, retryTimer = null, statsTimer = null, joined = false;
+let pc = null, resource = null, ticket = null, statsTimer = null, joined = false;
+let askToken = 0; // bumps on every new attempt so stale loops stop
 
 // iOS Safari ignores media-element volume, so route audio through Web Audio there.
 const elementVolumeWorks = (() => { const a = document.createElement('audio'); a.volume = 0.5; return a.volume === 0.5; })();
@@ -34,6 +38,87 @@ muteBtn.addEventListener('click', () => { muted = !muted; store.set('muted', mut
 
 function setState(text, cls) { stateEl.textContent = text; stateEl.className = 'pill ' + (cls || ''); }
 
+// --- Screens -------------------------------------------------------------
+
+function show(screen) {
+  for (const id of ['askForm', 'waiting', 'notice', 'tapToPlay']) $(id).hidden = id !== screen;
+  overlay.hidden = !screen;
+}
+
+function notice(text, canAskAgain = true) {
+  $('noticeText').textContent = text;
+  $('again').hidden = !canAskAgain;
+  show('notice');
+  setState('offline', 'bad');
+}
+
+function waiting(text) {
+  $('waitText').textContent = text;
+  show('waiting');
+  setState('waiting', 'warn');
+}
+
+// --- Asking the host -----------------------------------------------------
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function ask(text = 'Waiting for the host to let you in…') {
+  const mine = ++askToken;
+  teardown();
+  waiting(text);
+  let res;
+  try {
+    res = await fetch(base + 'join', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: nameInput.value.trim() }),
+    });
+  } catch {
+    return notice("Can't reach the host. Check your internet connection and try again.");
+  }
+  if (mine !== askToken) return;
+  if (res.status === 404) return notice('The host stopped sharing. Ask them for a new link.', false);
+  if (res.status === 429) return notice('Too many people are knocking right now. Try again in a minute.');
+  if (!res.ok) return notice(`Something went wrong (${res.status}). Try again.`);
+  ticket = (await res.json()).ticket;
+
+  // Long-poll until the host decides.
+  for (;;) {
+    let state;
+    try {
+      const r = await fetch(`${base}join/${ticket}`, { cache: 'no-store' });
+      if (r.status === 404) state = 'stopped';
+      else state = (await r.json()).state;
+    } catch {
+      if (mine !== askToken) return;
+      await delay(2000);
+      continue;
+    }
+    if (mine !== askToken) return;
+    if (state === 'pending') continue;
+    if (state === 'allowed') return connect(mine);
+    return ended(state);
+  }
+}
+
+function ended(state) {
+  ({
+    denied: () => notice('The host said no this time.'),
+    expired: () => notice("The host didn't answer in time."),
+    kicked: () => notice('The host removed you from the stream.'),
+    stopped: () => notice('The host stopped sharing. Ask them for a new link.', false),
+  }[state] || (() => notice('You left the stream.')))();
+}
+
+async function cancel() {
+  askToken++;
+  if (ticket) fetch(`${base}join/${ticket}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+  ticket = null;
+  show('askForm');
+  setState('offline', 'bad');
+}
+
+// --- Watching ------------------------------------------------------------
+
 function attachAudio(track) {
   if (elementVolumeWorks) return; // the <video> element plays the audio itself
   if (source) source.disconnect();
@@ -49,11 +134,19 @@ function enableStereo(sdp) {
     line.includes('stereo=1') ? line : `${line};stereo=1;sprop-stereo=1`);
 }
 
-async function connect() {
-  clearTimeout(retryTimer);
-  teardown();
+function play() {
+  video.play().then(() => { if (!$('tapToPlay').hidden) show(null); })
+    .catch(() => show('tapToPlay')); // autoplay with sound refused: one more tap
+}
+
+async function connect(mine) {
+  waiting('Connecting…');
   setState('connecting', 'warn');
-  const conn = new RTCPeerConnection();
+  let iceServers = [];
+  try { iceServers = (await (await fetch(base + 'config', { cache: 'no-store' })).json()).iceServers || []; } catch { /* STUN-less still works on a LAN */ }
+  if (mine !== askToken) return;
+
+  const conn = new RTCPeerConnection({ iceServers: iceServers.map((s) => ({ urls: s.urls, username: s.username, credential: s.credential })) });
   pc = conn;
   conn.addTransceiver('video', { direction: 'recvonly' });
   conn.addTransceiver('audio', { direction: 'recvonly' });
@@ -63,60 +156,201 @@ async function connect() {
     if (e.track.kind === 'audio') attachAudio(e.track);
     if (e.track.kind === 'video' || elementVolumeWorks) stream.addTrack(e.track);
     if (video.srcObject !== stream) video.srcObject = stream;
-    video.play().catch(() => {});
   };
 
-  let dropTimer = null;
+  let everConnected = false, dropTimer = null;
   conn.onconnectionstatechange = () => {
     if (conn !== pc) return;
     const s = conn.connectionState;
     clearTimeout(dropTimer);
-    if (s === 'connected') { setState('live', 'live'); msg.textContent = ''; }
-    else if (s === 'disconnected') { setState('reconnecting', 'warn'); dropTimer = setTimeout(() => retry(), 3000); }
-    else if (s === 'failed') retry();
+    if (s === 'connected') {
+      if (!everConnected) { watchTicket(conn); watchWatchers(conn); }
+      everConnected = true;
+      setState('live', 'live');
+      show(null);
+      play();
+    } else if (s === 'disconnected') {
+      setState('reconnecting', 'warn');
+      dropTimer = setTimeout(() => lost(everConnected), 8000);
+    } else if (s === 'failed' || s === 'closed') {
+      lost(everConnected);
+    }
   };
 
   try {
     await conn.setLocalDescription(await conn.createOffer());
-    const res = await fetch('/whep', { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: conn.localDescription.sdp });
-    if (!res.ok) throw new Error(`server said ${res.status}: ${await res.text()}`);
+    // Non-trickle: wait (briefly) for our candidates so the offer carries them.
+    await gatherDone(conn, 3000);
+    const res = await fetch(base + 'whep', {
+      method: 'POST', headers: { 'Content-Type': 'application/sdp', 'X-Ticket': ticket }, body: conn.localDescription.sdp,
+    });
+    if (res.status === 404) return ended('stopped');
+    if (!res.ok) throw new Error(`the host said ${res.status}`);
     resource = res.headers.get('Location');
     await conn.setRemoteDescription({ type: 'answer', sdp: enableStereo(await res.text()) });
   } catch (err) {
     console.error(err);
-    msg.textContent = `Can't reach the stream (${err.message}). Retrying…`;
-    retry();
+    if (conn === pc) { teardown(); notice(`Couldn't start the stream (${err.message}).`); }
   }
 }
 
-function retry() {
-  setState('offline', 'bad');
-  clearTimeout(retryTimer);
-  retryTimer = setTimeout(connect, 2000);
+function gatherDone(conn, timeout) {
+  if (conn.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, timeout);
+    conn.addEventListener('icegatheringstatechange', () => {
+      if (conn.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+    });
+  });
+}
+
+// The connection ended: find out why before deciding what to show.
+async function lost(everConnected) {
+  const mine = askToken;
+  teardown();
+  if (!everConnected) {
+    return notice("Couldn't reach the host directly. Their network (or yours) blocks direct connections; ask them to set up a relay server in Movie night.");
+  }
+  const state = await ticketState();
+  if (mine !== askToken) return;
+  if (state === 'kicked' || state === 'stopped') return ended(state);
+  // A network blip: ask to be let back in (the host has to allow it again).
+  ask('Connection dropped. Asking the host to let you back in…');
+}
+
+// While watching, keep asking the host's side about our ticket, so a kick or
+// "stop sharing" shows up at once instead of after the connection times out.
+async function watchTicket(conn) {
+  while (conn === pc) {
+    let st;
+    try {
+      const r = await fetch(`${base}join/${ticket}?while=watching`, { cache: 'no-store' });
+      st = r.status === 404 ? 'stopped' : (await r.json()).state;
+    } catch { await delay(3000); continue; }
+    if (conn !== pc) return;
+    if (st === 'kicked' || st === 'stopped') { teardown(); return ended(st); }
+    if (st !== 'watching') return; // left: the connection handler takes over
+  }
+}
+
+// --- Who's watching --------------------------------------------------------
+
+const watchersEl = $('watchers'), watchersBtn = $('watchersBtn');
+
+function renderWatchers(list) {
+  $('watcherCount').textContent = list.length;
+  watchersBtn.setAttribute('aria-label', `${list.length} watching`);
+  const ul = $('watcherNames');
+  ul.replaceChildren(...list.map((w) => {
+    const li = document.createElement('li');
+    li.textContent = w.name; // names come from other people: never as HTML
+    if (w.you) { const s = document.createElement('span'); s.className = 'you'; s.textContent = ' (you)'; li.append(s); }
+    return li;
+  }));
+  watchersEl.hidden = false;
+}
+
+// Long-polls the watcher list; rings when someone new starts watching.
+async function watchWatchers(conn) {
+  let version = '', known = null;
+  while (conn === pc) {
+    let data;
+    try {
+      const r = await fetch(`${base}watchers?ticket=${ticket}&since=${version}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      data = await r.json();
+    } catch { if (conn !== pc) return; await delay(3000); continue; }
+    if (conn !== pc) return;
+    const ids = new Set(data.watchers.map((w) => w.name + '|' + w.since));
+    if (known && data.watchers.some((w) => !w.you && !known.has(w.name + '|' + w.since))) joinSound();
+    known = ids;
+    version = data.version;
+    renderWatchers(data.watchers);
+  }
+}
+
+// Plays at the viewer's own volume (through Web Audio on iPhone).
+let joinBuffer = null, joinAudio = null;
+async function joinSound() {
+  if (muted || volume === 0) return;
+  const g = Math.pow(volume / 100, 2);
+  try {
+    if (actx) {
+      if (!joinBuffer) joinBuffer = await actx.decodeAudioData(await (await fetch(base + 'join-sound.wav')).arrayBuffer());
+      const src = actx.createBufferSource();
+      src.buffer = joinBuffer;
+      src.connect(gain);
+      src.start();
+    } else {
+      if (!joinAudio) joinAudio = new Audio(base + 'join-sound.wav');
+      joinAudio.volume = Math.min(1, g);
+      joinAudio.currentTime = 0;
+      await joinAudio.play();
+    }
+  } catch { /* a chime isn't worth an error */ }
+}
+
+// Hover shows the list on computers; tapping toggles it on phones.
+watchersBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const open = watchersEl.classList.toggle('open');
+  watchersBtn.setAttribute('aria-expanded', open);
+});
+document.addEventListener('click', () => { watchersEl.classList.remove('open'); watchersBtn.setAttribute('aria-expanded', 'false'); });
+
+// What the host's side says about our ticket ('left' if we can't tell).
+async function ticketState() {
+  try {
+    const r = await fetch(`${base}join/${ticket}`, { cache: 'no-store' });
+    return r.status === 404 ? 'stopped' : (await r.json()).state;
+  } catch { return 'left'; }
 }
 
 function teardown() {
+  watchersEl.hidden = true;
+  watchersEl.classList.remove('open');
   if (resource) fetch(resource, { method: 'DELETE', keepalive: true }).catch(() => {});
   resource = null;
   if (pc) { pc.ontrack = pc.onconnectionstatechange = null; pc.close(); }
   pc = null;
 }
 
-$('join').addEventListener('click', async () => {
-  // Must run inside the tap so autoplay with sound is allowed (iOS/Android).
+// --- Buttons -------------------------------------------------------------
+
+function unlockAudio() {
+  // Must run inside a tap so playing with sound is allowed later (iOS/Android).
   joined = true;
   if (!elementVolumeWorks && !actx) {
     actx = new (window.AudioContext || window.webkitAudioContext)();
     gain = actx.createGain();
     gain.connect(actx.destination);
   }
-  if (actx) await actx.resume();
-  overlay.hidden = true;
+  if (actx) actx.resume();
+  if (!video.srcObject) video.srcObject = new MediaStream();
+  video.play().catch(() => {});
+  if (!actx && !joinAudio) {
+    // Safari only lets an element make sound later if it was played during a tap.
+    joinAudio = new Audio(base + 'join-sound.wav');
+    joinAudio.muted = true;
+    joinAudio.play().then(() => { joinAudio.pause(); joinAudio.muted = false; }).catch(() => { joinAudio.muted = false; });
+  }
   applyVolume();
-  connect();
-});
+}
 
-window.addEventListener('pagehide', teardown);
+$('askForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  store.set('name', nameInput.value.trim());
+  unlockAudio();
+  ask();
+});
+$('again').addEventListener('click', () => { unlockAudio(); ask(); });
+$('cancel').addEventListener('click', cancel);
+$('play').addEventListener('click', () => { unlockAudio(); play(); });
+
+window.addEventListener('pagehide', () => {
+  if (ticket && !resource) fetch(`${base}join/${ticket}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+  teardown();
+});
 
 // Fullscreen: the whole stage where supported; iPhone only allows native video fullscreen.
 $('fs').addEventListener('click', () => {
@@ -132,13 +366,13 @@ let idleTimer = null;
 function wake() {
   stage.classList.remove('idle');
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => { if (joined) stage.classList.add('idle'); }, 3000);
+  idleTimer = setTimeout(() => { if (pc && overlay.hidden) stage.classList.add('idle'); }, 3000);
 }
 ['mousemove', 'touchstart', 'keydown'].forEach((ev) => stage.addEventListener(ev, wake, { passive: true }));
 
 // Keyboard: up/down volume, m mute, f fullscreen.
 document.addEventListener('keydown', (e) => {
-  if (e.target === vol) return;
+  if (e.target === vol || e.target === nameInput) return;
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     volume = Math.max(0, Math.min(100, volume + (e.key === 'ArrowUp' ? 5 : -5)));
     muted = false; store.set('volume', volume); store.set('muted', muted); applyVolume(); e.preventDefault();
@@ -164,6 +398,7 @@ async function updateStats() {
     if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s;
   });
   if (!v) { statsEl.textContent = 'waiting for video…'; return; }
+  const local = pair && report.get(pair.localCandidateId);
   const now = performance.now();
   let kbps = 0;
   if (last) kbps = ((v.bytesReceived + (a ? a.bytesReceived : 0) - last.bytes) * 8) / (now - last.t);
@@ -174,9 +409,13 @@ async function updateStats() {
     `bitrate ${(kbps / 1000).toFixed(2)} Mbps`,
     `buffer  video ${jb(v)} ms · audio ${jb(a)} ms`,
     `rtt     ${pair && pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) + ' ms' : '?'}`,
+    `path    ${local ? (local.candidateType === 'relay' ? 'relay server' : 'direct') + ` (${local.candidateType})` : '?'}`,
     `lost    ${v.packetsLost || 0} pkts · nacks ${v.nackCount || 0} · freezes ${v.freezeCount || 0}`,
     `dropped ${v.framesDropped || 0} frames`,
   ].join('\n');
 }
 
+nameInput.value = store.get('name', '');
+show('askForm');
+setState('offline', 'bad');
 applyVolume();

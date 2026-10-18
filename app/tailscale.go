@@ -39,19 +39,19 @@ func TailscaleState() string {
 func tailscaleStatus(state string) string {
 	switch state {
 	case TailscaleMissing:
-		return "Tailscale isn't installed — see the Tailscale guide"
+		return "Tailscale isn't installed; switch Network to Internet link"
 	case TailscaleSignedOut:
-		return "Sign in to Tailscale to start sharing"
+		return "Sign in to Tailscale, or switch Network to Internet link"
 	}
 	return ""
 }
 
-// WriteGuide saves the Tailscale guide (with the icon inlined) into dir and
+// WriteGuide saves the "How it works" guide (with the icon inlined) into dir and
 // returns its path, so it can be opened in the default browser.
 func WriteGuide(dir string) (string, error) {
 	icon := "data:image/png;base64," + base64.StdEncoding.EncodeToString(assets.Icon128)
 	html := strings.Replace(string(assets.Guide), "{{ICON}}", icon, 1)
-	path := filepath.Join(dir, "tailscale-guide.html")
+	path := filepath.Join(dir, "movie-night-guide.html")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}

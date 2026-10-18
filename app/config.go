@@ -47,17 +47,33 @@ type Config struct {
 	Blocklist   []string `json:"blocklist"`
 	Port        int      `json:"port"`
 	ICEPort     int      `json:"icePort"`
-	Encoder     string   `json:"encoder"`  // auto | nvenc | qsv | amf | x264 ...
-	AllowLAN    bool     `json:"allowLan"` // accept viewers outside Tailscale
+	Encoder     string   `json:"encoder"` // auto | nvenc | qsv | amf | x264 ...
+
+	// Network is how friends reach you: NetInternet (a public link through a
+	// Cloudflare tunnel) or NetTailscale (only devices on your tailnet).
+	Network string `json:"network"`
+	// RequireApproval: every friend waits until you click Allow.
+	RequireApproval bool       `json:"requireApproval"`
+	HideIP          bool       `json:"hideIp"` // relay-only; needs TURN
+	TURN            TURNConfig `json:"turn"`
 }
+
+const (
+	NetInternet  = "internet"
+	NetTailscale = "tailscale"
+)
 
 func defaultConfig() Config {
 	return Config{
 		Quality: "1080p", ShareAudio: true, AudioMode: audio.ModeAll,
 		Blocklist: append([]string(nil), audio.DefaultBlocklist...),
 		Port:      8080, ICEPort: 8443, Encoder: "auto",
+		Network: NetInternet, RequireApproval: true,
 	}
 }
+
+// RelayOnly reports whether media must go through the relay (Hide my IP).
+func (c Config) RelayOnly() bool { return c.HideIP && c.TURN.Configured() }
 
 // EffectiveKbps is the bitrate actually used.
 func (c Config) EffectiveKbps() int {
@@ -81,6 +97,9 @@ func loadConfig(path string) Config {
 	}
 	if cfg.AudioMode != audio.ModeWhitelist {
 		cfg.AudioMode = audio.ModeAll
+	}
+	if cfg.Network != NetTailscale {
+		cfg.Network = NetInternet
 	}
 	return cfg
 }

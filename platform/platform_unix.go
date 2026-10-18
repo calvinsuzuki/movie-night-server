@@ -11,11 +11,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
+// Command runs a helper program (ffmpeg, cloudflared) that dies with us.
 func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = childAttr()
+	return cmd
 }
 
 func Open(target string) error {
@@ -109,4 +114,81 @@ func Alert(msg string) {
 		return
 	}
 	fmt.Fprintln(os.Stderr, msg)
+}
+
+// Ask shows a "Let in / Deny" popup (zenity) without blocking. answer gets
+// true or false when the user clicks; dismiss closes it without an answer.
+// Without zenity it falls back to a plain notification.
+func Ask(title, msg string) (answer <-chan bool, dismiss func()) {
+	ch := make(chan bool, 1)
+	if _, err := exec.LookPath("zenity"); err != nil {
+		go exec.Command("notify-send", "-i", "movienight", "-u", "critical", title, msg).Run()
+		return ch, func() {}
+	}
+	cmd := exec.Command("zenity", "--question", "--title="+title, "--text="+msg, "--no-wrap",
+		"--ok-label=Let in", "--cancel-label=Deny", "--icon-name=movienight")
+	if err := cmd.Start(); err != nil {
+		return ch, func() {}
+	}
+	var dismissed atomic.Bool
+	go func() {
+		err := cmd.Wait()
+		if dismissed.Load() {
+			return
+		}
+		var exit *exec.ExitError
+		switch {
+		case err == nil:
+			ch <- true
+		case errors.As(err, &exit) && exit.ExitCode() == 1: // Deny
+			ch <- false
+		}
+	}()
+	return ch, func() {
+		if !dismissed.Swap(true) {
+			cmd.Process.Kill()
+		}
+	}
+}
+
+// alertClient must match audio.AlertClient, so the sound isn't shared.
+const alertClient = "Movie night alerts"
+
+var (
+	soundMu    sync.Mutex
+	soundFiles = map[*byte]string{}
+)
+
+// PlaySound plays a WAV file held in memory, without waiting.
+func PlaySound(wav []byte) {
+	if len(wav) == 0 {
+		return
+	}
+	soundMu.Lock()
+	path, ok := soundFiles[&wav[0]]
+	if !ok {
+		f, err := os.CreateTemp("", "movienight-*.wav")
+		if err != nil {
+			soundMu.Unlock()
+			return
+		}
+		f.Write(wav)
+		f.Close()
+		path = f.Name()
+		soundFiles[&wav[0]] = path
+	}
+	soundMu.Unlock()
+	switch {
+	case runtime.GOOS == "darwin":
+		go exec.Command("afplay", path).Run()
+	case lookPath("paplay"):
+		go exec.Command("paplay", "--client-name="+alertClient, path).Run()
+	case lookPath("aplay"):
+		go exec.Command("aplay", "-q", path).Run()
+	}
+}
+
+func lookPath(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }

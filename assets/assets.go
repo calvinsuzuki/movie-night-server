@@ -15,25 +15,39 @@ var (
 	trayPNG []byte
 	//go:embed tray-paused.png
 	trayPausedPNG []byte
+	//go:embed tray-request.ico
+	trayRequestICO []byte
+	//go:embed tray-request.png
+	trayRequestPNG []byte
 
 	//go:embed icon-128.png
 	Icon128 []byte
-	// Guide is the Tailscale how-to page; {{ICON}} is replaced with Icon128.
+	// KnockSound plays for the sharer when someone asks to join; JoinSound
+	// plays in viewers' browsers when another friend starts watching.
+	//go:embed notification-sound.wav
+	KnockSound []byte
+	//go:embed join-sound.wav
+	JoinSound []byte
+
+	// Guide is the "How it works" page; {{ICON}} is replaced with Icon128.
 	//go:embed guide.html
 	Guide []byte
 )
 
+// Tray icon variants.
+const (
+	TrayNormal  = iota
+	TrayPaused  // greyed out: not sharing, or paused
+	TrayRequest // blue dot: someone is waiting to be let in
+)
+
 // Tray returns the tray icon in the format the OS tray expects (ICO on
-// Windows, PNG elsewhere); paused gives the greyed-out variant.
-func Tray(paused bool) []byte {
+// Windows, PNG elsewhere).
+func Tray(variant int) []byte {
+	ico := [...][]byte{trayICO, trayPausedICO, trayRequestICO}
+	png := [...][]byte{trayPNG, trayPausedPNG, trayRequestPNG}
 	if runtime.GOOS == "windows" {
-		if paused {
-			return trayPausedICO
-		}
-		return trayICO
+		return ico[variant]
 	}
-	if paused {
-		return trayPausedPNG
-	}
-	return trayPNG
+	return png[variant]
 }

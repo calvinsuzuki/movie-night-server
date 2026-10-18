@@ -1,5 +1,6 @@
-// Movie night streams one monitor plus selected apps' sound to browsers on
-// your Tailscale network over WebRTC. It lives in the taskbar tray.
+// Movie night streams one monitor plus selected apps' sound to friends'
+// browsers over WebRTC, through a private invite link (or Tailscale). It lives
+// in the taskbar tray.
 package main
 
 import (
@@ -20,9 +21,9 @@ import (
 )
 
 func main() {
-	headless := flag.Bool("headless", false, "run without the tray icon (Ctrl+C to stop)")
+	headless := flag.Bool("headless", false, "share right away without the tray icon (Ctrl+C to stop)")
 	listMonitors := flag.Bool("list-monitors", false, "list capturable monitors and exit")
-	guide := flag.Bool("guide", false, "open the Tailscale guide and exit (used by the installer)")
+	guide := flag.Bool("guide", false, "open the How it works guide and exit (used by the installer)")
 	flag.Parse()
 
 	if *guide {
@@ -65,11 +66,6 @@ func main() {
 		return
 	}
 
-	// Nothing works without Tailscale; show how to get it (e.g. a fresh Ubuntu install).
-	if !*headless && app.TailscaleState() == app.TailscaleMissing {
-		tray.OpenGuide()
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := a.Start(ctx); err != nil {
@@ -79,6 +75,9 @@ func main() {
 	}
 
 	if *headless {
+		log.Print("headless: anyone with the link gets in")
+		a.SkipApprovalThisRun()
+		a.StartSharing()
 		sig, stop := signal.NotifyContext(ctx, os.Interrupt)
 		defer stop()
 		<-sig.Done()
