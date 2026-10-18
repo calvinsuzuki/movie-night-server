@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 # A nightly is named "nightly" but carries a real version number for Windows and
-# apt: the last release tag plus the build time, e.g. 1.1.1+nightly.202610181930,
+# apt: the last release tag plus the build time, e.g. 0.2.1+nightly.202610181930,
 # so it installs over that release and the next release installs over it.
 $Name = $Version
 if ($Version -eq "nightly") {

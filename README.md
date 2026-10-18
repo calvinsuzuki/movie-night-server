@@ -344,7 +344,7 @@ movie-night-server/
 ```
 
 The build downloads a pinned **cloudflared** release, checks its SHA256, and puts the installer and `.deb` in `dist\`.
-Without `-Version` you get a **nightly**: `MovieNight-Setup-nightly.exe` and `movienight_nightly_amd64.deb`, versioned as the last release plus the build time (e.g. `1.1.1+nightly.202610181930`), so it installs over that release and the next release installs over it. `build.sh` builds the Windows installer too when it finds Inno Setup (Git Bash on Windows); on Linux you get the `.deb` and a bare `movienight.exe`.
+Without `-Version` you get a **nightly**: `MovieNight-Setup-nightly.exe` and `movienight_nightly_amd64.deb`, versioned as the last release plus the build time (e.g. `0.2.1+nightly.202610181930`), so it installs over that release and the next release installs over it. `build.sh` builds the Windows installer too when it finds Inno Setup (Git Bash on Windows); on Linux you get the `.deb` and a bare `movienight.exe`.
 
 ```powershell
 ❯ go test ./stream/        # join, ticket and network rules

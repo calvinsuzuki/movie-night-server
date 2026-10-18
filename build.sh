@@ -20,7 +20,7 @@ step() { printf '\033[36m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31mbuild: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # A nightly is named "nightly" but carries a real version number for Windows and
-# apt: the last release tag plus the build time, e.g. 1.1.1+nightly.202610181930,
+# apt: the last release tag plus the build time, e.g. 0.2.1+nightly.202610181930,
 # so it installs over that release and the next release installs over it.
 NAME="$VERSION"
 if [ "$VERSION" = "nightly" ]; then

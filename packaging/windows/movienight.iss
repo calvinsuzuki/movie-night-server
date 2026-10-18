@@ -3,7 +3,7 @@
 ; nightly builds) and expects dist\windows\ to be filled.
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "0.0.0"
 #endif
 #ifndef OutputName
   #define OutputName AppVersion
