@@ -9,8 +9,8 @@ Friends open the link in any browser (PC, Android, iPhone/iPad), with nothing to
 
 | | |
 |---|---|
-| **Windows 10/11** | Double-click `dist\MovieNight-Setup-1.1.0.exe`. It installs the app, ffmpeg, cloudflared, shortcuts and a firewall rule. |
-| **Ubuntu 22.04** | Double-click `dist/movienight_1.1.0_amd64.deb` (or `sudo apt install ./movienight_1.1.0_amd64.deb`), then open *Movie night* from the app grid. |
+| **Windows 10/11** | Double-click `dist\MovieNight-Setup-1.1.1.exe`. It installs the app, ffmpeg, cloudflared, shortcuts and a firewall rule. |
+| **Ubuntu 22.04** | Double-click `dist/movienight_1.1.1_amd64.deb` (or `sudo apt install ./movienight_1.1.1_amd64.deb`), then open *Movie night* from the app grid. |
 
 On Ubuntu, screen capture needs the **"Ubuntu on Xorg"** session (pick it with the ⚙ on the login screen). The tray icon uses the AppIndicator extension, which Ubuntu enables by default.
 
@@ -69,7 +69,10 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
   - The viewer page long-polls for your answer.
   - An allowed ticket opens exactly one connection; it's spent after that, and revoked when the connection ends.
   - Each IP can make at most 3 requests a minute, and at most 5 can wait at once.
-- **Media path:** video never goes through the tunnel. Each side learns its public address from public STUN servers (Cloudflare, Google), and the browser connects directly. About 10–20% of networks (carrier-grade NAT, strict firewalls) need the optional TURN relay.
+- **Media path:** video never goes through the tunnel. Movie night listens on UDP 8443 on every IPv4 *and IPv6* address. Each side learns its public address from public STUN servers (Cloudflare, Google), and the browser connects directly.
+  - **IPv6** has no address translation, so it reaches friends whose IPv4 sits behind a strict carrier NAT, provided both sides have IPv6 (common on Brazilian ISPs and mobile networks).
+  - **What's left:** friends with neither path (IPv4-only behind strict NAT, VPNs) need the optional TURN relay.
+  - **The log** records the path each viewer used, and what a browser offered when it couldn't connect.
 - **Windows sound:** each allowed app is recorded with WASAPI *process loopback*, and the streams are mixed.
 - **Linux sound:** allowed apps are moved into a `movienight` PulseAudio sink that is looped back to your speakers.
 - **Video encoder:** picked automatically: NVENC → QSV → AMF → x264. NVENC with the bundled ffmpeg 9.x needs NVIDIA driver 610+.
@@ -82,7 +85,7 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
 Needs Go, ffmpeg, Inno Setup, go-winres and nfpm (see `build.ps1`). The script downloads a pinned cloudflared release and checks its SHA256. Run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1 -Version 1.1.0
+powershell -ExecutionPolicy Bypass -File build.ps1 -Version 1.1.1
 ```
 
 Outputs land in `dist\`. Run `go run ./tools/genicon` to redraw the icons and `go test ./stream/` for the join/ticket rules.

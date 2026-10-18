@@ -317,6 +317,12 @@ func (a *App) StartSharing() {
 	if cfg.Network == NetInternet && local == "" {
 		a.setStatus("The web server isn't running; see the log")
 	} else if cfg.Network == NetInternet {
+		// Re-open the ICE sockets: IPv6 privacy addresses rotate daily, and
+		// nobody is connected yet, so this costs nothing.
+		if err := a.hub.Listen(net.IPv4zero, cfg.ICEPort, false); err != nil {
+			log.Print(err)
+			a.setStatus(err.Error())
+		}
 		go a.keepICEFresh(ctx)
 		a.startTunnel(ctx, local)
 	} else {

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -60,7 +61,9 @@ type Viewer struct {
 
 type peer struct {
 	pc        *webrtc.PeerConnection
+	sender    *webrtc.RTPSender // to look up which network path was chosen
 	name      string
+	offered   string // the browser's candidates, summarized for the log
 	connected time.Time
 	dropTimer *time.Timer
 }
@@ -77,7 +80,7 @@ type Hub struct {
 
 	mu    sync.Mutex
 	api   *webrtc.API
-	udp   net.PacketConn
+	mux   io.Closer // the ICE socket(s)
 	ice   ICEConfig
 	peers map[string]*peer
 	ver   uint64        // bumps whenever someone starts or stops watching
@@ -114,9 +117,11 @@ func NewHub() (*Hub, error) {
 // Virtual adapters whose addresses no friend can reach.
 var skipInterfaces = []string{"vethernet", "wsl", "docker", "virtualbox", "vmware", "hyper-v", "loopback", "br-", "veth"}
 
-// Listen (re)opens the single UDP port ICE uses (one firewall rule), dropping
-// every viewer. With tailnetOnly only Tailscale addresses are offered;
-// otherwise LAN and public (STUN) addresses are, minus virtual adapters.
+// Listen (re)opens the UDP port ICE uses (one firewall rule), dropping every
+// viewer. With tailnetOnly it listens on listenIP and only Tailscale
+// addresses are offered. Otherwise it listens on every IPv4 and IPv6
+// address: LAN and public (STUN) IPv4, and IPv6, which usually needs no NAT
+// traversal at all and so reaches friends whose IPv4 is behind strict NAT.
 func (h *Hub) Listen(listenIP net.IP, icePort int, tailnetOnly bool) error {
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterDefaultCodecs(); err != nil {
@@ -129,32 +134,55 @@ func (h *Hub) Listen(listenIP net.IP, icePort int, tailnetOnly bool) error {
 	}
 
 	h.Close()
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: listenIP, Port: icePort})
-	if err != nil {
-		return fmt.Errorf("ICE port %d: %w", icePort, err)
-	}
 	se := webrtc.SettingEngine{}
-	se.SetICEUDPMux(webrtc.NewICEUDPMux(nil, udp))
-	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	var mux ice.UDPMux
 	if tailnetOnly {
+		udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: listenIP, Port: icePort})
+		if err != nil {
+			return fmt.Errorf("ICE port %d: %w", icePort, err)
+		}
+		mux = webrtc.NewICEUDPMux(nil, udp)
+		se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 		se.SetIPFilter(IsTailnet)
 	} else {
-		se.SetInterfaceFilter(func(name string) bool {
-			name = strings.ToLower(name)
-			for _, s := range skipInterfaces {
-				if strings.Contains(name, s) {
-					return false
-				}
-			}
-			return true
-		})
+		var err error
+		mux, err = ice.NewMultiUDPMuxFromPort(icePort,
+			ice.UDPMuxFromPortWithInterfaceFilter(usableInterface),
+			ice.UDPMuxFromPortWithIPFilter(usableIP),
+			ice.UDPMuxFromPortWithReadBufferSize(1<<20))
+		if err != nil {
+			return fmt.Errorf("ICE port %d: %w", icePort, err)
+		}
+		se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6})
+		se.SetInterfaceFilter(usableInterface)
+		se.SetIPFilter(usableIP)
 	}
+	se.SetICEUDPMux(mux)
 
 	h.mu.Lock()
-	h.udp = udp
+	h.mux = mux
 	h.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se))
 	h.mu.Unlock()
 	return nil
+}
+
+func usableInterface(name string) bool {
+	name = strings.ToLower(name)
+	for _, s := range skipInterfaces {
+		if strings.Contains(name, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// usableIP drops addresses no friend can reach: IPv6 link-local and
+// unique-local (fc00::/7, e.g. Tailscale's), which a remote browser can't route to.
+func usableIP(ip net.IP) bool {
+	if ip.To4() != nil {
+		return true
+	}
+	return !ip.IsLinkLocalUnicast() && !(ip[0]&0xfe == 0xfc)
 }
 
 // SetICE sets the STUN/TURN servers for viewers joining from now on.
@@ -282,10 +310,14 @@ func (h *Hub) Answer(offerSDP, name string) (id, answerSDP string, err error) {
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
 		return fail(err)
 	}
+	var first *webrtc.RTPSender
 	for _, t := range []*webrtc.TrackLocalStaticRTP{h.video, h.audio} {
 		sender, err := pc.AddTrack(t)
 		if err != nil {
 			return fail(err)
+		}
+		if first == nil {
+			first = sender
 		}
 		// RTCP must be read for the interceptors (NACK, reports) to run.
 		go func() {
@@ -309,7 +341,7 @@ func (h *Hub) Answer(offerSDP, name string) (id, answerSDP string, err error) {
 	<-gathered
 
 	id = newID()
-	p := &peer{pc: pc, name: name}
+	p := &peer{pc: pc, sender: first, name: name, offered: summarizeCandidates(offerSDP)}
 	h.mu.Lock()
 	h.peers[id] = p
 	h.mu.Unlock()
@@ -324,6 +356,7 @@ func (h *Hub) Answer(offerSDP, name string) (id, answerSDP string, err error) {
 			if p.connected.IsZero() {
 				p.connected = time.Now()
 				h.bump()
+				go log.Printf("viewer %s (%s) path: %s", id, name, selectedPath(p.sender))
 			}
 		case webrtc.PeerConnectionStateDisconnected:
 			// Give a flaky network 10 s to come back before cutting them off.
@@ -357,6 +390,10 @@ func (h *Hub) Remove(id string) bool {
 		return false
 	}
 	p.pc.Close()
+	if p.connected.IsZero() {
+		// Explains "couldn't reach the host directly" afterwards.
+		log.Printf("viewer %s (%s) never connected; the browser offered: %s", id, p.name, p.offered)
+	}
 	log.Printf("viewer %s (%s) left (%d watching)", id, p.name, h.Count())
 	if h.OnLeave != nil {
 		h.OnLeave(id)
@@ -427,10 +464,65 @@ func (h *Hub) Close() {
 	h.CloseAll()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.udp != nil {
-		h.udp.Close()
-		h.udp, h.api = nil, nil
+	if h.mux != nil {
+		h.mux.Close()
+		h.mux, h.api = nil, nil
 	}
+}
+
+// summarizeCandidates lists the network paths a browser offered, e.g.
+// "host mdns, srflx IPv4 177.1.2.3, srflx IPv6 2001:db8::1".
+func summarizeCandidates(sdp string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		// foundation component protocol priority address port "typ" type ...
+		f := strings.Fields(strings.TrimPrefix(line, "a=candidate:"))
+		if len(f) < 8 || !strings.EqualFold(f[2], "udp") {
+			continue
+		}
+		addr, typ := f[4], f[7]
+		desc := typ + " "
+		switch ip := net.ParseIP(addr); {
+		case strings.HasSuffix(addr, ".local"):
+			desc += "mdns" // hidden local address
+		case ip == nil:
+			desc += addr
+		case ip.To4() != nil:
+			desc += "IPv4 " + addr
+		default:
+			desc += "IPv6 " + addr
+		}
+		if !seen[desc] {
+			seen[desc] = true
+			out = append(out, desc)
+		}
+	}
+	if len(out) == 0 {
+		return "no UDP candidates (VPN or firewall blocking WebRTC?)"
+	}
+	return strings.Join(out, ", ")
+}
+
+// selectedPath describes the candidate pair a connected viewer uses.
+func selectedPath(s *webrtc.RTPSender) string {
+	if s == nil || s.Transport() == nil {
+		return "?"
+	}
+	pair, err := s.Transport().ICETransport().GetSelectedCandidatePair()
+	if err != nil || pair == nil {
+		return "?"
+	}
+	family := "IPv4"
+	if ip := net.ParseIP(pair.Remote.Address); ip != nil && ip.To4() == nil {
+		family = "IPv6"
+	}
+	return fmt.Sprintf("%s, us %s %s:%d ↔ them %s %s:%d", family,
+		pair.Local.Typ, pair.Local.Address, pair.Local.Port, pair.Remote.Typ, pair.Remote.Address, pair.Remote.Port)
 }
 
 func newID() string {
