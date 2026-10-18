@@ -384,11 +384,13 @@ func (a *App) StopSharing() {
 		a.base = ""
 	}
 	a.mu.Unlock()
+	// Tell every page first and give the answers a moment to get out through
+	// the tunnel, so viewers see the goodbye instead of a dropped connection.
+	if a.lobby != nil && a.lobby.Close() > 0 && cancel != nil {
+		time.Sleep(1500 * time.Millisecond)
+	}
 	if cancel != nil {
 		cancel()
-	}
-	if a.lobby != nil {
-		a.lobby.Close()
 	}
 	if a.hub != nil {
 		a.hub.CloseAll()

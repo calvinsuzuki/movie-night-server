@@ -81,16 +81,22 @@ func (l *Lobby) Open() string {
 }
 
 // Close ends the session: the link stops working and waiting pages are told.
-func (l *Lobby) Close() {
+// It returns how many pages were still waiting or watching.
+func (l *Lobby) Close() int {
 	l.mu.Lock()
 	l.token = ""
+	told := 0
 	for _, t := range l.tickets {
+		if t.state == Pending || t.state == Allowed || t.state == Watching {
+			told++
+		}
 		l.set(t, Stopped)
 	}
 	l.tickets = map[string]*ticket{}
 	l.byIP = map[string][]time.Time{}
 	l.mu.Unlock()
 	l.changed()
+	return told
 }
 
 // Token is the current link token, or "" while not sharing.

@@ -16,6 +16,7 @@ const store = {
 let volume = store.get('volume', 80);
 let muted = store.get('muted', false);
 let pc = null, resource = null, ticket = null, statsTimer = null, joined = false;
+let watched = false; // saw the stream at least once (gets the goodbye when it ends)
 let askToken = 0; // bumps on every new attempt so stale loops stop
 
 // iOS Safari ignores media-element volume, so route audio through Web Audio there.
@@ -45,9 +46,10 @@ function show(screen) {
   overlay.hidden = !screen;
 }
 
-function notice(text, canAskAgain = true) {
+function notice(text, canAskAgain = true, goodbye = false) {
   $('noticeText').textContent = text;
   $('again').hidden = !canAskAgain;
+  $('goodbye').hidden = !goodbye;
   show('notice');
   setState('offline', 'bad');
 }
@@ -105,7 +107,9 @@ function ended(state) {
     denied: () => notice('The host said no this time.'),
     expired: () => notice("The host didn't answer in time."),
     kicked: () => notice('The host removed you from the stream.'),
-    stopped: () => notice('The host stopped sharing. Ask them for a new link.', false),
+    stopped: () => watched
+      ? (video.srcObject = null, notice('The host ended the stream. Thanks for watching, see you next movie night!', false, true))
+      : notice('The host stopped sharing. Ask them for a new link.', false),
   }[state] || (() => notice('You left the stream.')))();
 }
 
@@ -165,7 +169,7 @@ async function connect(mine) {
     clearTimeout(dropTimer);
     if (s === 'connected') {
       if (!everConnected) { watchTicket(conn); watchWatchers(conn); }
-      everConnected = true;
+      everConnected = watched = true;
       setState('live', 'live');
       show(null);
       play();
