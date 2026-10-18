@@ -333,10 +333,12 @@ movie-night-server/
 | [nfpm](https://nfpm.goreleaser.com) | Ubuntu `.deb` |
 
 ```powershell
-❯ powershell -ExecutionPolicy Bypass -File build.ps1 -Version 1.1.1
+❯ powershell -ExecutionPolicy Bypass -File build.ps1                  # 🌙 nightly
+❯ powershell -ExecutionPolicy Bypass -File build.ps1 -Version 1.2.0   # 🏷️ release
 ```
 
 The build downloads a pinned **cloudflared** release, checks its SHA256, and puts the installer and `.deb` in `dist\`.
+Without `-Version` you get a **nightly**: `MovieNight-Setup-nightly.exe` and `movienight_nightly_amd64.deb`, versioned as the last release plus the build time (e.g. `1.1.1+nightly.202610181930`), so it installs over that release and the next release installs over it.
 
 ```powershell
 ❯ go test ./stream/        # join, ticket and network rules

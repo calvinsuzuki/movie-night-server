@@ -1,8 +1,20 @@
 # Builds Movie night for Windows (installer) and Ubuntu (.deb) into dist\.
-#   powershell -ExecutionPolicy Bypass -File build.ps1 [-Version 1.0.0]
-param([string]$Version = "1.0.0")
+#   powershell -ExecutionPolicy Bypass -File build.ps1                  # nightly
+#   powershell -ExecutionPolicy Bypass -File build.ps1 -Version 1.2.0   # release
+param([string]$Version = "nightly")
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+
+# A nightly is named "nightly" but carries a real version number for Windows and
+# apt: the last release tag plus the build time, e.g. 1.1.1+nightly.202610181930,
+# so it installs over that release and the next release installs over it.
+$Name = $Version
+if ($Version -eq "nightly") {
+    $last = (git describe --tags --abbrev=0 2>$null) -replace '^v', ''
+    if (-not $last) { $last = "0.0.0" }
+    $Version = "$last+nightly.$(Get-Date -Format yyyyMMddHHmm)"
+}
+$Numeric = ($Version -split '[+~-]')[0]
 
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $gobin = Join-Path (go env GOPATH) "bin"
@@ -43,7 +55,7 @@ Step "Embedding Windows icon and version info"
 & "$gobin\go-winres.exe" simply --arch amd64 --manifest gui --icon assets\icon.ico `
     --product-name "Movie night" --file-description "Movie night" --original-filename movienight.exe `
     --copyright "calvinsuzuki" `
-    --product-version $Version --file-version $Version --out rsrc; Check
+    --product-version $Numeric --file-version $Numeric --out rsrc; Check
 
 Step "Building Windows app"
 $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
@@ -60,7 +72,7 @@ Step "Building Windows installer"
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup not found: winget install JRSoftware.InnoSetup" }
-& $iscc /Q "/DAppVersion=$Version" packaging\windows\movienight.iss; Check
+& $iscc /Q "/DAppVersion=$Version" "/DOutputName=$Name" packaging\windows\movienight.iss; Check
 
 Step "Building Linux app"
 $env:GOOS = "linux"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
@@ -70,7 +82,7 @@ Remove-Item Env:GOOS, Env:GOARCH
 
 Step "Building Ubuntu .deb"
 $env:VERSION = $Version
-& "$gobin\nfpm.exe" package --config packaging\linux\nfpm.yaml --packager deb --target dist\; Check
+& "$gobin\nfpm.exe" package --config packaging\linux\nfpm.yaml --packager deb --target "dist\movienight_$($Name)_amd64.deb"; Check
 
-Step "Done"
+Step "Done: $Version"
 Get-ChildItem dist -File | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }

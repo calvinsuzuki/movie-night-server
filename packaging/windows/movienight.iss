@@ -1,8 +1,12 @@
 ; Inno Setup script for the Movie night Windows installer.
-; Built by build.ps1, which passes /DAppVersion=... and expects dist\windows\ to be filled.
+; Built by build.ps1, which passes /DAppVersion=... (and /DOutputName=nightly for
+; nightly builds) and expects dist\windows\ to be filled.
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
+#endif
+#ifndef OutputName
+  #define OutputName AppVersion
 #endif
 #define AppName "Movie night"
 #define AppExe "movienight.exe"
@@ -29,7 +33,7 @@ WizardStyle=modern
 Compression=lzma2/ultra64
 SolidCompression=yes
 OutputDir=..\..\dist
-OutputBaseFilename=MovieNight-Setup-{#AppVersion}
+OutputBaseFilename=MovieNight-Setup-{#OutputName}
 CloseApplications=force
 
 [Tasks]
