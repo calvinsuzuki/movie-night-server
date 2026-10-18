@@ -81,6 +81,7 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 | ⚡ | **Low delay** | WebRTC peer-to-peer, typically 0.2–0.5 s behind your screen. |
 | 🛰️ | **IPv4 and IPv6** | Connects over IPv6 when both sides have it, which gets around strict carrier NAT. |
 | 🛟 | **Optional relay** | Add a TURN server for the rare networks that block direct connections, and optionally hide your IP. |
+| 📶 | **Quality and ping on screen** | The top-right corner shows the resolution, frame rate, bitrate and your ping to the host, with a green, butter or red dot. |
 | 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. |
 
 <div align="right"><a href="#top">🍿 back to top</a></div>

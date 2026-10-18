@@ -389,16 +389,35 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'f') $('fs').click();
 });
 
-// Stats overlay.
+// Quality badge (top right, always while watching) and the stats overlay
+// (the ⓘ button), both fed from one getStats() a second.
+const qualityEl = $('quality');
 let last = null;
-$('statsBtn').addEventListener('click', () => {
-  statsEl.hidden = !statsEl.hidden;
-  clearInterval(statsTimer);
-  if (!statsEl.hidden) { last = null; statsTimer = setInterval(updateStats, 1000); updateStats(); }
-});
+$('statsBtn').addEventListener('click', () => { statsEl.hidden = !statsEl.hidden; updateStats(); });
+statsTimer = setInterval(updateStats, 1000);
+
+function resolutionName(w, h) {
+  if (!h) return '–';
+  const p = Math.min(w * 9 / 16, h); // a 21:9 movie in 1080p is still "1080p"
+  return p >= 1000 ? '1080p' : p >= 680 ? '720p' : p >= 460 ? '480p' : `${h}p`;
+}
+
+function renderQuality(v, kbps, rttMs) {
+  qualityEl.hidden = false;
+  $('qRes').textContent = resolutionName(v.frameWidth, v.frameHeight);
+  $('qFps').textContent = `${Math.round(v.framesPerSecond || 0)} fps`;
+  $('qRate').textContent = kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kbps`;
+  $('qPing').textContent = rttMs == null ? '– ms' : rttMs < 1 ? '<1 ms' : `${rttMs} ms`;
+  qualityEl.className = rttMs == null ? '' : rttMs < 100 ? 'good' : rttMs < 200 ? 'ok' : 'bad';
+}
 
 async function updateStats() {
-  if (!pc) { statsEl.textContent = 'not connected'; return; }
+  if (!pc || pc.connectionState !== 'connected') {
+    qualityEl.hidden = true;
+    last = null;
+    statsEl.textContent = pc ? 'connecting…' : 'not connected';
+    return;
+  }
   const report = await pc.getStats();
   let v = null, a = null, pair = null;
   report.forEach((s) => {
@@ -406,18 +425,21 @@ async function updateStats() {
     if (s.type === 'inbound-rtp' && s.kind === 'audio') a = s;
     if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s;
   });
-  if (!v) { statsEl.textContent = 'waiting for video…'; return; }
+  if (!v) { qualityEl.hidden = true; statsEl.textContent = 'waiting for video…'; return; }
   const local = pair && report.get(pair.localCandidateId);
   const now = performance.now();
   let kbps = 0;
   if (last) kbps = ((v.bytesReceived + (a ? a.bytesReceived : 0) - last.bytes) * 8) / (now - last.t);
   last = { t: now, bytes: v.bytesReceived + (a ? a.bytesReceived : 0) };
+  const rttMs = pair && pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null;
+  renderQuality(v, kbps, rttMs);
+  if (statsEl.hidden) return;
   const jb = (s) => (s && s.jitterBufferEmittedCount ? Math.round((s.jitterBufferDelay / s.jitterBufferEmittedCount) * 1000) : 0);
   statsEl.textContent = [
     `video   ${v.frameWidth || '?'}x${v.frameHeight || '?'} @ ${Math.round(v.framesPerSecond || 0)} fps`,
     `bitrate ${(kbps / 1000).toFixed(2)} Mbps`,
     `buffer  video ${jb(v)} ms · audio ${jb(a)} ms`,
-    `rtt     ${pair && pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) + ' ms' : '?'}`,
+    `rtt     ${rttMs != null ? rttMs + ' ms' : '?'}`,
     `path    ${local ? (local.candidateType === 'relay' ? 'relay server' : 'direct') + ` (${local.candidateType})` : '?'}`,
     `lost    ${v.packetsLost || 0} pkts · nacks ${v.nackCount || 0} · freezes ${v.freezeCount || 0}`,
     `dropped ${v.framesDropped || 0} frames`,

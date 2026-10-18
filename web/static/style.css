@@ -92,6 +92,18 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid r
 .pill.warn { color: var(--warn); }
 .pill.bad { color: var(--salt); background: var(--red); }
 
+/* Quality and ping, top right, fading out with the controls. */
+#quality { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right));
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 999px; background: var(--panel);
+  font: 600 13px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums;
+  color: var(--fg); transition: opacity .3s; pointer-events: none; }
+#quality .sep { width: 1px; align-self: stretch; background: rgba(255,255,255,.25); }
+#quality .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+#quality.good .dot { background: var(--live); }
+#quality.ok .dot { background: var(--butter); }
+#quality.bad .dot { background: var(--red); box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
+#stage.idle #quality { opacity: 0; }
+
 #stats { position: absolute; top: calc(12px + env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left));
   margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--panel);
   font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--fg); }
@@ -99,4 +111,5 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid r
 @media (max-width: 480px) {
   #controls { gap: 8px; }
   #volLabel { display: none; }
+  #quality .fps { display: none; }
 }
