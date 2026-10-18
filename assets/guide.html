@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Movie night · Tailscale guide</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #faf7f2; --card: #ffffff; --fg: #1d1a16; --muted: #6b645a; --line: #e7e0d5;
+    --accent: #c8392f; --accent-ink: #ffffff; --tip: #fff6e0; --tip-line: #edd9a3; --code: #f2ede5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme: dark;
+      --bg: #121110; --card: #1c1a18; --fg: #f1ece4; --muted: #a59d92; --line: #2e2a26;
+      --accent: #e8574b; --accent-ink: #ffffff; --tip: #2a2416; --tip-line: #4a3f22; --code: #262320; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; }
+  header img { width: 72px; height: 72px; flex: none; }
+  h1 { font-size: clamp(26px, 5vw, 36px); line-height: 1.15; margin: 0; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); font-size: 18px; margin: 12px 0 28px; }
+  h2 { font-size: 22px; margin: 40px 0 6px; display: flex; align-items: center; gap: 12px; }
+  h2 .num { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--accent-ink);
+    display: inline-grid; place-items: center; font-size: 17px; flex: none; }
+  h2 + p { color: var(--muted); margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; margin: 14px 0; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  ol, ul { padding-left: 22px; margin: 8px 0; }
+  li { margin: 6px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .grid .card { margin: 0; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--accent); color: var(--accent-ink); vertical-align: middle; margin-left: 6px; }
+  .tip { background: var(--tip); border: 1px solid var(--tip-line); border-radius: 12px; padding: 12px 16px; margin: 14px 0; }
+  code { background: var(--code); border-radius: 6px; padding: 1px 6px; font-size: 0.92em;
+    font-family: ui-monospace, Consolas, "Ubuntu Mono", monospace; word-break: break-all; }
+  pre { background: var(--code); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 10px 0; }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 18px 0 6px; color: var(--muted); font-size: 14px; }
+  .flow span.box { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; color: var(--fg); }
+  footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="{{ICON}}" alt="">
+    <h1>Watch movies with friends, using Tailscale</h1>
+  </header>
+  <p class="lede">Movie night streams your screen straight to your friends' browsers. Tailscale is the free app that
+    connects your devices privately, so friends can reach your stream from anywhere without you opening ports on your router.
+    It takes about five minutes the first time.</p>
+
+  <div class="flow">
+    <span class="box">🍿 Your PC (Movie night)</span> → <span class="box">🔒 Tailscale private network</span> →
+    <span class="box">📱💻 Friends' browsers</span>
+  </div>
+
+  <h2><span class="num">1</span> Set up Tailscale on your PC</h2>
+  <p>You do this once, on the computer that shares the movie.</p>
+  <div class="card">
+    <ol>
+      <li>Install Tailscale from <a href="https://tailscale.com/download">tailscale.com/download</a>.
+        The Movie night installer offers to do this for you on Windows. On Ubuntu, run:
+        <pre><code>curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up</code></pre></li>
+      <li><strong>Sign in</strong> with an account you already have (Google, Microsoft, GitHub, Apple…).
+        On Windows, click the Tailscale icon in the taskbar tray and choose <em>Log in</em>.
+        Ubuntu prints a link to open instead.</li>
+      <li>Open Movie night's popcorn menu. The status turns from <em>Waiting for Tailscale</em> to
+        <em>Sharing</em>, and a link like <code>http://100.x.y.z:8080</code> appears. That's your viewer link.</li>
+    </ol>
+  </div>
+
+  <h2><span class="num">2</span> Let your friends in</h2>
+  <p>Pick one of these. Both are done on the Tailscale website, in the <a href="https://login.tailscale.com/admin/machines">admin console</a>.</p>
+  <div class="grid">
+    <div class="card">
+      <h3>Share just your PC <span class="tag">Recommended</span></h3>
+      <ol>
+        <li>Open <strong>Machines</strong>.</li>
+        <li>Click the <strong>⋯</strong> menu next to your computer → <strong>Share…</strong></li>
+        <li>Create an invite link and send it to a friend (one link per friend).</li>
+      </ol>
+      <p>Friends keep their own Tailscale account and can only see this one computer.</p>
+    </div>
+    <div class="card">
+      <h3>Invite them to your network</h3>
+      <ol>
+        <li>Open <strong>Users</strong>.</li>
+        <li>Click <strong>Invite users</strong> and enter their e-mail.</li>
+      </ol>
+      <p>Simpler for close friends or family, but they join your whole network, and free plans limit how many users you can have.</p>
+    </div>
+  </div>
+
+  <h2><span class="num">3</span> What each friend does</h2>
+  <p>Send them this list together with the invite link.</p>
+  <div class="card">
+    <ol>
+      <li>Install Tailscale: <strong>iPhone/iPad</strong> from the App Store, <strong>Android</strong> from Google Play,
+        <strong>Windows/Mac/Linux</strong> from <a href="https://tailscale.com/download">tailscale.com/download</a>.</li>
+      <li>Open the invite link you sent, sign in with any account, and accept it.</li>
+      <li>Make sure Tailscale is <strong>connected</strong>: the switch is on in the app (on phones it shows up as a VPN).</li>
+      <li>Open your viewer link (<code>http://100.x.y.z:8080</code>) in a browser and tap <strong>Join stream</strong>.
+        Each friend sets their own volume with the slider.</li>
+    </ol>
+  </div>
+  <div class="tip">💡 Movie night can't share Discord or TeamSpeak sound, so talk there freely while you watch.
+    Friends won't hear themselves echoed back.</div>
+
+  <h2><span class="num">4</span> Movie time</h2>
+  <div class="card">
+    <ul>
+      <li>Popcorn menu → <strong>Copy viewer link</strong> and paste it in your group chat.</li>
+      <li><strong>Screen</strong> picks the monitor, <strong>Quality</strong> picks 480p / 720p / 1080p.
+        If friends see stuttering, lower the quality or bitrate.</li>
+      <li><strong>Sound</strong> lets you share all apps or only the ones you tick (for example just your browser or VLC).</li>
+      <li>Your internet upload is shared between viewers: about 5 Mbps per friend at 1080p.</li>
+    </ul>
+  </div>
+
+  <h2><span class="num">?</span> If something doesn't work</h2>
+  <div class="card">
+    <ul>
+      <li><strong>The link doesn't load:</strong> Tailscale must be connected on <em>both</em> your PC and the friend's device,
+        and Movie night must say <em>Sharing</em>.</li>
+      <li><strong>Laggy or blurry:</strong> on your PC run <code>tailscale ping &lt;friend's device&gt;</code>.
+        If it says <em>via DERP</em>, the connection is going through a slower relay. Restarting Tailscale on both sides
+        or trying another network often fixes it. Lowering Quality also helps.</li>
+      <li><strong>No sound for a friend:</strong> they should tap the page once, check the volume slider, and on iPhone
+        turn off silent mode.</li>
+      <li><strong>Windows asked about the firewall:</strong> allow Movie night (the installer normally does this).</li>
+      <li><strong>Ubuntu shows a black screen:</strong> log out and choose <em>Ubuntu on Xorg</em> with the ⚙ button on the login screen.</li>
+    </ul>
+  </div>
+
+  <footer>You can open this guide again any time from the popcorn menu → <em>Tailscale guide</em>.</footer>
+</div>
+</body>
+</html>

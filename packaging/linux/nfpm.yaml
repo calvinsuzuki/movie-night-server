@@ -1,0 +1,36 @@
+# nfpm config for the Ubuntu .deb (run from the repo root by build.ps1).
+name: movienight
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: video
+priority: optional
+maintainer: calvinsuzuki <calvinsuzuki@localhost>
+vendor: calvinsuzuki
+description: |
+  Share one monitor and selected apps' sound with friends on your Tailscale
+  network. Friends watch in any browser; the sharer controls it from the tray.
+homepage: https://tailscale.com
+license: Proprietary
+depends:
+  - ffmpeg
+  - pulseaudio-utils
+  - x11-xserver-utils
+recommends:
+  - xclip
+  - gnome-shell-extension-appindicator
+contents:
+  - src: dist/linux/movienight
+    dst: /usr/bin/movienight
+    file_info:
+      mode: 0755
+  - src: packaging/linux/movienight.desktop
+    dst: /usr/share/applications/movienight.desktop
+  - src: assets/icon-48.png
+    dst: /usr/share/icons/hicolor/48x48/apps/movienight.png
+  - src: assets/icon-128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/movienight.png
+  - src: assets/icon-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/movienight.png
+scripts:
+  postinstall: packaging/linux/postinstall.sh
