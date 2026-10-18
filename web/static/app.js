@@ -44,6 +44,8 @@ function setState(text, cls) { stateEl.textContent = text; stateEl.className = '
 function show(screen) {
   for (const id of ['askForm', 'waiting', 'notice', 'tapToPlay']) $(id).hidden = id !== screen;
   overlay.hidden = !screen;
+  // The join and goodbye screens get the popcorn-bucket gradient.
+  overlay.classList.toggle('bucket', screen === 'askForm' || (screen === 'notice' && !$('goodbye').hidden));
 }
 
 function notice(text, canAskAgain = true, goodbye = false) {

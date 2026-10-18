@@ -1,46 +1,57 @@
 :root {
   color-scheme: dark;
-  --fg: #f2f2f2;
-  --muted: #a0a0a0;
-  --panel: rgba(18, 18, 20, 0.78);
-  --accent: #e8b04b;
+  /* The popcorn bucket: butter on red stripes, in a dark theater. */
+  --butter: #f8de8d;
+  --red: #ab1313;
+  --red-deep: #901010;
+  --salt: #ffffff;
+  --theater: #000000;
+
+  --fg: var(--salt);
+  --muted: rgba(255, 255, 255, 0.68);
+  --panel: rgba(0, 0, 0, 0.62);
+  --accent: var(--butter);
   --live: #3ccf7a;
-  --warn: #e8b04b;
-  --bad: #e5605a;
+  --warn: var(--butter);
+  --bad: var(--red);
+  --bucket: repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 48px, transparent 48px 96px),
+    radial-gradient(120% 85% at 50% 0%, var(--red) 0%, var(--red-deep) 48%, var(--theater) 100%);
 }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; margin: 0; background: #000; color: var(--fg);
+html, body { height: 100%; margin: 0; background: var(--theater); color: var(--fg);
   font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 
-#stage { position: fixed; inset: 0; overflow: hidden; background: #000; }
-#video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+#stage { position: fixed; inset: 0; overflow: hidden; background: var(--theater); }
+#video { width: 100%; height: 100%; object-fit: contain; background: var(--theater); display: block; }
 
 #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px; background: rgba(0,0,0,.55); }
-#overlay[hidden] { display: none; }
+/* The join and goodbye screens sit on the bucket gradient. */
+#overlay.bucket { background: var(--bucket); }
 #brand { margin: 0 0 8px; font-weight: 700; font-size: clamp(28px, 6vw, 44px); letter-spacing: -0.01em; color: var(--fg); }
 .screen { display: flex; flex-direction: column; align-items: center; gap: 14px; width: min(360px, 100%); padding: 0 16px; }
 .screen[hidden] { display: none; }
 .screen p { margin: 0; color: var(--muted); text-align: center; }
 #goodbye { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-#goodbye h2 { margin: 0; font-size: 26px; color: var(--fg); }
+#goodbye h2 { margin: 0; font-size: 28px; color: var(--butter); }
 #goodbye .popcorn { font-size: 64px; line-height: 1; animation: bob 2.4s ease-in-out infinite; }
 @keyframes bob { 50% { transform: translateY(-8px) rotate(-6deg); } }
 @media (prefers-reduced-motion: reduce) { #goodbye .popcorn { animation: none; } }
 #askForm label { color: var(--muted); font-size: 14px; text-align: center; }
-#name { width: 100%; padding: 12px 16px; border-radius: 12px; border: 1px solid #3a3a3e; background: #141416;
+#name { width: 100%; padding: 12px 16px; border-radius: 12px; border: 1px solid rgba(248,222,141,.35); background: rgba(0,0,0,.45);
   color: var(--fg); font: inherit; font-size: 17px; text-align: center; }
 #name:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
 button.primary { display: inline-flex; align-items: center; gap: 10px; padding: 16px 28px;
-  border: 0; border-radius: 999px; background: var(--accent); color: #1a1205;
+  border: 0; border-radius: 999px; background: var(--butter); color: var(--theater);
+  box-shadow: 0 6px 18px rgba(0,0,0,.35);
   font: 600 18px/1 inherit; font-family: inherit; cursor: pointer; }
 button.primary svg { width: 26px; height: 26px; fill: currentColor; }
 button.primary:disabled { opacity: .6; cursor: default; }
-button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid #3a3a3e; background: transparent;
+button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid rgba(248,222,141,.45); background: transparent;
   color: var(--fg); font: inherit; cursor: pointer; }
-.spinner { width: 36px; height: 36px; border-radius: 50%; border: 3px solid #3a3a3e; border-top-color: var(--accent);
+.spinner { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,.18); border-top-color: var(--butter);
   animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
@@ -61,12 +72,11 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid #
 
 /* Who's watching: count in the corner, names on hover (tap on phones). */
 #watchers { position: relative; flex: none; }
-#watchers[hidden] { display: none; }
 #controls #watchersBtn { width: auto; height: 40px; padding: 0 14px 0 12px; border-radius: 999px; gap: 6px;
   display: inline-flex; align-items: center; font: 600 15px/1 inherit; font-family: inherit; font-variant-numeric: tabular-nums; }
 #watcherList { position: absolute; left: 0; bottom: calc(100% + 10px); min-width: 180px; max-width: min(280px, 80vw);
-  max-height: 50vh; overflow-y: auto; padding: 10px 14px; border-radius: 12px; background: rgba(18, 18, 20, 0.94);
-  border: 1px solid #2c2c30; opacity: 0; transform: translateY(4px); pointer-events: none;
+  max-height: 50vh; overflow-y: auto; padding: 10px 14px; border-radius: 12px; background: rgba(0, 0, 0, 0.92);
+  border: 1px solid rgba(248,222,141,.25); opacity: 0; transform: translateY(4px); pointer-events: none;
   transition: opacity .15s, transform .15s; }
 #watchers:hover #watcherList, #watchers.open #watcherList, #watchersBtn:focus-visible + #watcherList {
   opacity: 1; transform: none; pointer-events: auto; }
@@ -80,7 +90,7 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid #
 .pill { padding: 3px 10px; border-radius: 999px; background: var(--panel); font-size: 13px; color: var(--muted); }
 .pill.live { color: var(--live); }
 .pill.warn { color: var(--warn); }
-.pill.bad { color: var(--bad); }
+.pill.bad { color: var(--salt); background: var(--red); }
 
 #stats { position: absolute; top: calc(12px + env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left));
   margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--panel);

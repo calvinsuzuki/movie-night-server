@@ -10,8 +10,8 @@
 
 <br><br>
 
-<a href="https://github.com/calvinsuzuki/movie-night-server/releases/latest"><img src="https://img.shields.io/github/v/release/calvinsuzuki/movie-night-server?style=for-the-badge&logo=github&label=release&color=e8b04b" alt="Latest release"></a>
-<a href="https://github.com/calvinsuzuki/movie-night-server/releases"><img src="https://img.shields.io/github/downloads/calvinsuzuki/movie-night-server/total?style=for-the-badge&logo=github&label=downloads&color=dc2a2e" alt="Downloads"></a>
+<a href="https://github.com/calvinsuzuki/movie-night-server/releases/latest"><img src="https://img.shields.io/github/v/release/calvinsuzuki/movie-night-server?style=for-the-badge&logo=github&label=release&color=ab1313" alt="Latest release"></a>
+<a href="https://github.com/calvinsuzuki/movie-night-server/releases"><img src="https://img.shields.io/github/downloads/calvinsuzuki/movie-night-server/total?style=for-the-badge&logo=github&label=downloads&color=901010" alt="Downloads"></a>
 <br>
 <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 10 and 11">
 <img src="https://img.shields.io/badge/Ubuntu-22.04-E95420?style=for-the-badge&logo=ubuntu&logoColor=white" alt="Ubuntu 22.04">
@@ -36,6 +36,7 @@
 - [🎛️ The popcorn menu](#%EF%B8%8F-the-popcorn-menu)
 - [⚙️ Configuration](#%EF%B8%8F-configuration)
 - [🛟 Troubleshooting](#-troubleshooting)
+- [🎨 Palette](#-palette)
 - [🗂️ Project structure](#%EF%B8%8F-project-structure)
 - [🔨 Build from source](#-build-from-source)
 - [🗺️ Roadmap](#%EF%B8%8F-roadmap)
@@ -274,6 +275,24 @@ Log out and pick **Ubuntu on Xorg** with the ⚙ on the login screen. Wayland sc
 
 <div align="right"><a href="#top">🍿 back to top</a></div>
 
+## 🎨 Palette
+
+Movie night is dressed like a popcorn bucket: butter on red stripes, in a dark theater.
+
+| Swatch | Hex | Name | Where it shows up |
+| :---: | --- | --- | --- |
+| <img src="https://img.shields.io/badge/-%23f8de8d-f8de8d?style=for-the-badge" alt="#f8de8d"> | `#f8de8d` | 🧈 Butter | Buttons, sliders, headings, the "good enough" ping dot |
+| <img src="https://img.shields.io/badge/-%23ab1313-ab1313?style=for-the-badge" alt="#ab1313"> | `#ab1313` | 🍿 Bucket red | The gradient behind the join and goodbye screens, "offline" and bad-ping badges |
+| <img src="https://img.shields.io/badge/-%23901010-901010?style=for-the-badge" alt="#901010"> | `#901010` | 🎟️ Deep red | The darker half of the gradient and the bucket stripes |
+| <img src="https://img.shields.io/badge/-%23ffffff-ffffff?style=for-the-badge" alt="#ffffff"> | `#ffffff` | 🧂 Salt | Text |
+| <img src="https://img.shields.io/badge/-%23000000-000000?style=for-the-badge" alt="#000000"> | `#000000` | 🎬 Theater | The stage behind the movie, text on butter buttons |
+
+```css
+--butter: #f8de8d;  --red: #ab1313;  --red-deep: #901010;  --salt: #ffffff;  --theater: #000000;
+```
+
+<div align="right"><a href="#top">🍿 back to top</a></div>
+
 ## 🗂️ Project structure
 
 <details>
@@ -353,6 +372,6 @@ Built on the shoulders of [Pion WebRTC](https://github.com/pion/webrtc), [FFmpeg
 
 <sub>© calvinsuzuki · Made for movie nights with friends.</sub>
 
-<a href="#top"><img src="https://img.shields.io/badge/🍿_back_to_top-e8b04b?style=for-the-badge" alt="Back to top"></a>
+<a href="#top"><img src="https://img.shields.io/badge/🍿_back_to_top-f8de8d?style=for-the-badge" alt="Back to top"></a>
 
 </div>
