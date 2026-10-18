@@ -315,7 +315,8 @@ movie-night-server/
 ├── tools/genicon/       🖌️ draws the popcorn icon
 ├── packaging/           📦 Inno Setup (Windows) and nfpm (Ubuntu)
 ├── docs/                🖼️ screenshots for this README
-└── build.ps1            🔨 one-command build for both platforms
+├── build.ps1            🔨 one-command build for both platforms
+└── build.sh             🔨 the same, from Linux or Git Bash
 ```
 
 </details>
@@ -337,8 +338,13 @@ movie-night-server/
 ❯ powershell -ExecutionPolicy Bypass -File build.ps1 -Version 1.2.0   # 🏷️ release
 ```
 
+```bash
+❯ ./build.sh                  # 🌙 nightly, from Linux or Git Bash
+❯ ./build.sh -Version 1.2.0   # 🏷️ release
+```
+
 The build downloads a pinned **cloudflared** release, checks its SHA256, and puts the installer and `.deb` in `dist\`.
-Without `-Version` you get a **nightly**: `MovieNight-Setup-nightly.exe` and `movienight_nightly_amd64.deb`, versioned as the last release plus the build time (e.g. `1.1.1+nightly.202610181930`), so it installs over that release and the next release installs over it.
+Without `-Version` you get a **nightly**: `MovieNight-Setup-nightly.exe` and `movienight_nightly_amd64.deb`, versioned as the last release plus the build time (e.g. `1.1.1+nightly.202610181930`), so it installs over that release and the next release installs over it. `build.sh` builds the Windows installer too when it finds Inno Setup (Git Bash on Windows); on Linux you get the `.deb` and a bare `movienight.exe`.
 
 ```powershell
 ❯ go test ./stream/        # join, ticket and network rules
