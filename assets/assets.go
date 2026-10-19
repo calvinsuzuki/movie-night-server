@@ -2,8 +2,11 @@
 package assets
 
 import (
-	_ "embed"
+	"embed"
+	"encoding/json"
+	"io/fs"
 	"runtime"
+	"strings"
 )
 
 var (
@@ -46,12 +49,60 @@ var (
 
 // ViewerFiles are served next to the viewer page.
 func ViewerFiles() map[string][]byte {
-	return map[string][]byte{
+	files := map[string][]byte{
 		"join-sound.wav":        JoinSound,
 		"background-full.jpg":   BackgroundFull,
 		"background-low.jpg":    BackgroundLow,
 		"background-mobile.jpg": BackgroundMobile,
 	}
+	throw, hit := Sounds()
+	for _, name := range append(throw, hit...) {
+		files[name], _ = sounds.ReadFile(name)
+	}
+	return files
+}
+
+// Emoji throw sounds: drop a throw-*.mp3 or hit-*.mp3 in this folder and
+// rebuild, and it joins the draw; its odds are in sounds.json.
+//
+//go:embed throw-*.mp3 hit-*.mp3
+var sounds embed.FS
+
+//go:embed sounds.json
+var soundOdds []byte
+
+// SoundOdds is the weight of each throw and hit sound from sounds.json, with
+// any sound file missing there at 1.
+func SoundOdds() (throw, hit map[string]float64) {
+	var odds struct{ Throw, Hit map[string]float64 }
+	json.Unmarshal(soundOdds, &odds) // checked by the tests
+	throwFiles, hitFiles := Sounds()
+	return withAll(odds.Throw, throwFiles), withAll(odds.Hit, hitFiles)
+}
+
+func withAll(weights map[string]float64, files []string) map[string]float64 {
+	if weights == nil {
+		weights = map[string]float64{}
+	}
+	for _, f := range files {
+		if _, ok := weights[f]; !ok {
+			weights[f] = 1
+		}
+	}
+	return weights
+}
+
+// Sounds lists the throw and hit sound files.
+func Sounds() (throw, hit []string) {
+	names, _ := fs.Glob(sounds, "*.mp3")
+	for _, n := range names {
+		if strings.HasPrefix(n, "throw-") {
+			throw = append(throw, n)
+		} else {
+			hit = append(hit, n)
+		}
+	}
+	return throw, hit
 }
 
 // Tray icon variants.

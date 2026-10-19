@@ -16,17 +16,19 @@ import (
 // link stops working when the share session ends:
 //
 //	GET    /s/{token}/                 viewer page (and its css/js)
-//	GET    /s/{token}/config           STUN/TURN servers for the browser
+//	GET    /s/{token}/config           STUN/TURN servers and throwable emojis for the browser
 //	POST   /s/{token}/join             {name} → {ticket}
 //	GET    /s/{token}/join/{ticket}    long-poll the sharer's answer (?while=watching: a kick)
 //	DELETE /s/{token}/join/{ticket}    withdraw the request
 //	POST   /s/{token}/whep             SDP offer (X-Ticket header) → answer
 //	DELETE /s/{token}/whep/{id}        leave
 //	GET    /s/{token}/watchers         who's watching (?ticket=, long-poll with ?since=)
+//	POST   /s/{token}/throw            {ticket, emoji}: throw it at everyone's screen
+//	GET    /s/{token}/throws           throws to animate (?ticket=, long-poll with ?since=)
 //
-// extra holds in-memory files served next to the page (the join sound and
+// extra holds in-memory files served next to the page (sounds and
 // backgrounds).
-func Handler(h *Hub, l *Lobby, page fs.FS, extra map[string][]byte) http.Handler {
+func Handler(h *Hub, l *Lobby, rx *Reactions, page fs.FS, extra map[string][]byte) http.Handler {
 	mux := http.NewServeMux()
 	files := http.FileServerFS(page)
 
@@ -37,7 +39,7 @@ func Handler(h *Hub, l *Lobby, page fs.FS, extra map[string][]byte) http.Handler
 		f := r.PathValue("file")
 		if f == "config" {
 			ice := h.ICE()
-			writeJSON(w, http.StatusOK, map[string]any{"iceServers": ice.Servers})
+			writeJSON(w, http.StatusOK, map[string]any{"iceServers": ice.Servers, "emojis": Emojis, "sounds": rx.Files()})
 			return
 		}
 		if b, ok := extra[f]; ok {
@@ -106,6 +108,49 @@ func Handler(h *Hub, l *Lobby, page fs.FS, extra map[string][]byte) http.Handler
 			list = append(list, watcher{v.Name, v.ID == me, v.Since.UnixMilli()})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"version": ver, "watchers": list})
+	})
+	// Only people watching may throw, or see throws.
+	mux.HandleFunc("POST /s/{token}/throw", func(w http.ResponseWriter, r *http.Request) {
+		if !validToken(w, r, l) {
+			return
+		}
+		var body struct{ Ticket, Emoji string }
+		json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body)
+		me, ok := l.Viewer(body.Ticket)
+		if !ok {
+			http.Error(w, "not watching", http.StatusForbidden)
+			return
+		}
+		name := "A friend"
+		for _, v := range h.Viewers() {
+			if v.ID == me {
+				name = v.Name
+			}
+		}
+		switch _, err := rx.Add(body.Ticket, name, body.Emoji); err {
+		case nil:
+			w.WriteHeader(http.StatusNoContent)
+		case ErrThrowRate:
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+	})
+	mux.HandleFunc("GET /s/{token}/throws", func(w http.ResponseWriter, r *http.Request) {
+		if !validToken(w, r, l) {
+			return
+		}
+		if _, ok := l.Viewer(r.URL.Query().Get("ticket")); !ok {
+			http.Error(w, "not watching", http.StatusForbidden)
+			return
+		}
+		since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+		if err != nil { // just joined: start from now, nothing to replay
+			writeJSON(w, http.StatusOK, map[string]any{"seq": rx.Seq(), "throws": []Throw{}})
+			return
+		}
+		throws, seq := rx.Since(since, 25*time.Second)
+		writeJSON(w, http.StatusOK, map[string]any{"seq": seq, "throws": throws})
 	})
 	mux.HandleFunc("DELETE /s/{token}/join/{ticket}", func(w http.ResponseWriter, r *http.Request) {
 		if !validToken(w, r, l) {

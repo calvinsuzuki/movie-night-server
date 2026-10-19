@@ -12,7 +12,7 @@ func TestHandlerRules(t *testing.T) {
 	hub, _ := NewHub()
 	l := NewLobby()
 	page := fstest.MapFS{"index.html": {Data: []byte("viewer")}}
-	srv := httptest.NewServer(Handler(hub, l, page, map[string][]byte{"join-sound.wav": []byte("RIFF")}))
+	srv := httptest.NewServer(Handler(hub, l, NewReactions(), page, map[string][]byte{"join-sound.wav": []byte("RIFF")}))
 	defer srv.Close()
 	token := l.Open()
 	s := srv.URL + "/s/" + token + "/"
@@ -41,6 +41,8 @@ func TestHandlerRules(t *testing.T) {
 		{"config", "GET", s + "config", "", nil, 200},
 		{"extra file", "GET", s + "join-sound.wav", "", nil, 200},
 		{"watchers without watching", "GET", s + "watchers?ticket=nope", "", nil, 403},
+		{"throw without watching", "POST", s + "throw", `{"ticket":"nope","emoji":"🍿"}`, nil, 403},
+		{"throws without watching", "GET", s + "throws?ticket=nope", "", nil, 403},
 		{"join", "POST", s + "join", `{"name":"Eve"}`, nil, 201},
 		{"whep without ticket", "POST", s + "whep", "v=0", nil, 403},
 		{"whep with bogus ticket", "POST", s + "whep", "v=0", []string{"X-Ticket", "nope"}, 403},

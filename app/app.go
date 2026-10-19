@@ -45,6 +45,7 @@ type App struct {
 	ctx         context.Context
 	hub         *stream.Hub
 	lobby       *stream.Lobby
+	reactions   *stream.Reactions
 	handler     http.Handler
 	srv         *http.Server
 	localURL    string // where cloudflared forwards to
@@ -129,8 +130,10 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	hub.OnViewers = a.notify
 	hub.OnLeave = lobby.Gone
+	a.reactions = stream.NewReactions()
+	a.reactions.SetSounds(assets.SoundOdds())
 	a.hub, a.lobby = hub, lobby
-	a.handler = stream.Handler(hub, lobby, web.Files(), assets.ViewerFiles())
+	a.handler = stream.Handler(hub, lobby, a.reactions, web.Files(), assets.ViewerFiles())
 
 	go a.forward(ctx, videoPort, "video")
 	go a.forward(ctx, audioPort, "audio")
@@ -307,7 +310,8 @@ func (a *App) StartSharing() {
 	}
 	a.sharing, a.paused = true, false
 	// Pick up relay settings edited in config.json since launch.
-	a.cfg.TURN, a.cfg.HideIP = loadConfig(a.cfgPath).TURN, loadConfig(a.cfgPath).HideIP
+	fresh := loadConfig(a.cfgPath)
+	a.cfg.TURN, a.cfg.HideIP = fresh.TURN, fresh.HideIP
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.shareCancel = cancel
 	cfg, local := a.cfg, a.localURL
@@ -394,6 +398,9 @@ func (a *App) StopSharing() {
 	}
 	if a.hub != nil {
 		a.hub.CloseAll()
+	}
+	if a.reactions != nil {
+		a.reactions.Clear()
 	}
 	a.stopVideo()
 	a.stopAudio()

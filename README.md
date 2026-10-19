@@ -81,6 +81,7 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 | ⚡ | **Low delay** | WebRTC peer-to-peer, typically 0.2–0.5 s behind your screen. |
 | 🛰️ | **IPv4 and IPv6** | Connects over IPv6 when both sides have it, which gets around strict carrier NAT. |
 | 🛟 | **Optional relay** | Add a TURN server for the rare networks that block direct connections, and optionally hide your IP. |
+| 🎯 | **Throw emojis at the screen** | Tap the 🍿 above the watcher count and it flies at everyone's screen with your name, a whoosh and, 0.3–0.8 s later, a smack. The little ˄ arrow on the button picks what you throw: 🍿😆😤🤮😭🤭🌚👋👌🤌👊👏💩👀. |
 | 📶 | **Quality and ping on screen** | The top-right corner shows the resolution, frame rate, bitrate and your ping to the host, with a green, butter or red dot. |
 | 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. |
 
@@ -222,6 +223,21 @@ Most friends connect directly. A VPN, strict office or school Wi-Fi, or a few pr
 ```
 
 Open it with **Network → Relay server settings…**, save, then *Stop sharing* and *Start sharing* again. With a relay you can also turn on **Hide my IP**, so friends never see your internet address.
+
+</details>
+
+<details>
+<summary><b>🎯 Tuning the throw sounds</b></summary>
+<br>
+
+Every throw plays one whoosh when it leaves and one smack when it lands, picked at random and the same for everyone. The odds are built into each version, in [`assets/sounds.json`](assets/sounds.json). Each sound has a weight: a sound with `5` comes up five times as often as one with `1`, and `0` turns it off.
+
+```jsonc
+"throw": { "throw-1.mp3": 1, "throw-2.mp3": 1, "throw-3.mp3": 2 },
+"hit":   { "hit-pan.mp3": 5, "hit-cartoon.mp3": 2, "hit-metal.mp3": 1, "hit-enderman.mp3": 0, … }
+```
+
+Edit it and rebuild. To add your own sound, drop a `throw-*.mp3` or `hit-*.mp3` into `assets/` (one missing from `sounds.json` plays at weight 1). `go test ./assets/` catches a name that doesn't match a file.
 
 </details>
 

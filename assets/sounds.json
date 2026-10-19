@@ -1,0 +1,19 @@
+{
+  "_help": "Odds of each emoji-throw sound, built into the app. Relative weights: a sound with 5 comes up five times as often as one with 1; 0 turns it off. A throw-*.mp3 or hit-*.mp3 missing here plays at 1. Rebuild after editing.",
+  "throw": {
+    "throw-1.mp3": 1,
+    "throw-2.mp3": 1,
+    "throw-3.mp3": 1
+  },
+  "hit": {
+    "hit-cartoon.mp3": 10,
+    "hit-enderman.mp3": 2,
+    "hit-hf.mp3": 5,
+    "hit-hit.mp3": 10,
+    "hit-kozumi.mp3": 5,
+    "hit-metal.mp3": 1,
+    "hit-pan.mp3": 10,
+    "hit-tf2.mp3": 5,
+    "hit-tomato.mp3": 10
+  }
+}

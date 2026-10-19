@@ -22,9 +22,14 @@ let askToken = 0; // bumps on every new attempt so stale loops stop
 // iOS Safari ignores media-element volume, so route audio through Web Audio there.
 const elementVolumeWorks = (() => { const a = document.createElement('audio'); a.volume = 0.5; return a.volume === 0.5; })();
 let actx = null, gain = null, source = null;
+// Sound effects (join chime, throws) mix through their own gain at the viewer's volume.
+let fx = null, fxGain = null;
+const fxBuffers = new Map(); // file → Promise<AudioBuffer>
+let emojis = ['🍿']; // what can be thrown, from the host
 
 function applyVolume() {
   const g = muted ? 0 : Math.pow(volume / 100, 2); // perceptual curve
+  if (fxGain) fxGain.gain.value = g;
   if (gain) gain.gain.value = g;
   else { video.volume = Math.min(1, g); video.muted = muted || !joined; }
   vol.value = volume;
@@ -150,7 +155,12 @@ async function connect(mine) {
   waiting('Connecting…');
   setState('connecting', 'warn');
   let iceServers = [];
-  try { iceServers = (await (await fetch(base + 'config', { cache: 'no-store' })).json()).iceServers || []; } catch { /* STUN-less still works on a LAN */ }
+  try {
+    const cfg = await (await fetch(base + 'config', { cache: 'no-store' })).json();
+    iceServers = cfg.iceServers || [];
+    if (cfg.emojis && cfg.emojis.length) emojis = cfg.emojis;
+    (cfg.sounds || []).forEach(loadEffect); // so the first throw isn't silent
+  } catch { /* STUN-less still works on a LAN */ }
   if (mine !== askToken) return;
 
   const conn = new RTCPeerConnection({ iceServers: iceServers.map((s) => ({ urls: s.urls, username: s.username, credential: s.credential })) });
@@ -171,7 +181,7 @@ async function connect(mine) {
     const s = conn.connectionState;
     clearTimeout(dropTimer);
     if (s === 'connected') {
-      if (!everConnected) { watchTicket(conn); watchWatchers(conn); }
+      if (!everConnected) { watchTicket(conn); watchWatchers(conn); watchThrows(conn); }
       everConnected = watched = true;
       setState('live', 'live');
       show(null);
@@ -257,6 +267,7 @@ function renderWatchers(list) {
     return li;
   }));
   watchersEl.hidden = false;
+  thrower.hidden = false;
 }
 
 // "Ana joined!" in a speech bubble for a few seconds.
@@ -290,7 +301,7 @@ async function watchWatchers(conn) {
     if (known) {
       const fresh = data.watchers.filter((w) => !w.you && !known.has(w.name + '|' + w.since)
         && !(now - (gone.get(w.name) || 0) < 60000) && !names.has(w.name));
-      if (fresh.length) joinSound();
+      if (fresh.length) playEffect('join-sound.wav');
       fresh.forEach((w) => joinedBubble(w.name));
     }
     known = ids;
@@ -300,25 +311,179 @@ async function watchWatchers(conn) {
   }
 }
 
-// Plays at the viewer's own volume (through Web Audio on iPhone).
-let joinBuffer = null, joinAudio = null;
-async function joinSound() {
-  if (muted || volume === 0) return;
-  const g = Math.pow(volume / 100, 2);
+// Sound effects play at the viewer's own volume and can overlap (a volley of
+// throws). Web Audio where there is one; a plain audio element otherwise.
+function loadEffect(file) {
+  if (!fx || !file) return null;
+  if (!fxBuffers.has(file)) {
+    fxBuffers.set(file, fetch(base + file).then((r) => r.arrayBuffer())
+      .then((b) => new Promise((ok, bad) => fx.decodeAudioData(b, ok, bad))) // callback form for older Safari
+      .catch(() => { fxBuffers.delete(file); return null; }));
+  }
+  return fxBuffers.get(file);
+}
+
+async function playEffect(file) {
+  if (!file || muted || volume === 0) return;
   try {
-    if (actx) {
-      if (!joinBuffer) joinBuffer = await actx.decodeAudioData(await (await fetch(base + 'join-sound.wav')).arrayBuffer());
-      const src = actx.createBufferSource();
-      src.buffer = joinBuffer;
-      src.connect(gain);
+    if (fx) {
+      const buf = await loadEffect(file);
+      if (!buf) return;
+      const src = fx.createBufferSource();
+      src.buffer = buf;
+      src.connect(fxGain);
       src.start();
     } else {
-      if (!joinAudio) joinAudio = new Audio(base + 'join-sound.wav');
-      joinAudio.volume = Math.min(1, g);
-      joinAudio.currentTime = 0;
-      await joinAudio.play();
+      const a = new Audio(base + file);
+      a.volume = Math.min(1, Math.pow(volume / 100, 2));
+      await a.play();
     }
-  } catch { /* a chime isn't worth an error */ }
+  } catch { /* a sound effect isn't worth an error */ }
+}
+
+// --- Emoji throws ----------------------------------------------------------
+
+const thrower = $('thrower'), throwBtn = $('throwBtn'), throwsEl = $('throws');
+const emojiPick = $('emojiPick'), emojiMenu = $('emojiMenu');
+throwBtn.textContent = store.get('emoji', '🍿');
+
+// Throws the emoji on the button.
+throwBtn.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  closeEmojiMenu();
+  const emoji = throwBtn.textContent;
+  let ok = false;
+  try {
+    const r = await fetch(base + 'throw', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket, emoji }),
+    });
+    ok = r.ok;
+  } catch { /* offline: nothing flies */ }
+  if (!ok) bounce('nope');
+});
+
+function bounce(cls) {
+  throwBtn.classList.remove('picked', 'nope');
+  void throwBtn.offsetWidth; // restart the animation
+  throwBtn.classList.add(cls);
+}
+
+// The arrow opens a picker; the choice sticks (and is remembered) until changed.
+emojiPick.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!emojiMenu.hidden) return closeEmojiMenu();
+  emojiMenu.replaceChildren(...emojis.map((emoji) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = emoji;
+    b.setAttribute('role', 'menuitemradio');
+    b.setAttribute('aria-checked', emoji === throwBtn.textContent);
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      throwBtn.textContent = emoji;
+      store.set('emoji', emoji);
+      closeEmojiMenu();
+      bounce('picked');
+      throwBtn.focus();
+    });
+    return b;
+  }));
+  emojiMenu.hidden = false;
+  emojiPick.setAttribute('aria-expanded', 'true');
+  (emojiMenu.querySelector('[aria-checked="true"]') || emojiMenu.firstChild).focus();
+});
+emojiMenu.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', closeEmojiMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !emojiMenu.hidden) { closeEmojiMenu(); emojiPick.focus(); } });
+
+function closeEmojiMenu() {
+  emojiMenu.hidden = true;
+  emojiPick.setAttribute('aria-expanded', 'false');
+}
+
+// Long-polls the host for throws (everyone's, ours included) and animates them.
+async function watchThrows(conn) {
+  let seq = '';
+  while (conn === pc) {
+    let data;
+    try {
+      const r = await fetch(`${base}throws?ticket=${ticket}&since=${seq}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      data = await r.json();
+    } catch { if (conn !== pc) return; await delay(3000); continue; }
+    if (conn !== pc) return;
+    seq = data.seq;
+    // After a sleeping tab wakes up, only the last few are worth showing.
+    data.throws.slice(-8).forEach((t, i) => setTimeout(() => animateThrow(t), i * 90));
+  }
+}
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// An emoji flies up from the bottom, grows as it comes at the screen, smacks
+// into it at (t.x, t.y) with a burst, then slides off. The host picks how long
+// it's in the air (0.3–0.8 s), so everyone hears the hit at the same moment.
+function animateThrow(t) {
+  if (throwsEl.childElementCount >= 30) return;
+  const w = stage.clientWidth, h = stage.clientHeight;
+  const el = document.createElement('div');
+  el.className = 'throw';
+  const face = document.createElement('div');
+  face.className = 'emoji';
+  face.textContent = t.emoji;
+  const tag = document.createElement('div');
+  tag.className = 'tag';
+  tag.textContent = t.name; // names come from other people: never as HTML
+  const burst = document.createElement('div');
+  burst.className = 'burst';
+  el.append(burst, face, tag);
+  throwsEl.append(el);
+
+  const half = el.offsetWidth / 2;
+  const tx = t.x * w - half, ty = t.y * h - 24;
+  const sx = tx + (Math.random() - 0.5) * w * 0.4, sy = h + 40;
+  const spin = Math.random() < 0.5 ? -1 : 1;
+  const flight = t.flight || 700;
+  const turn = 320 * spin;
+
+  playEffect(t.throw);
+  if (reducedMotion.matches) {
+    // No flying: it just appears where it hits, on time with the hit sound.
+    el.animate([{ transform: `translate(${tx}px, ${ty}px)`, opacity: 0 }, { transform: `translate(${tx}px, ${ty}px)`, opacity: 0 }],
+      { duration: flight, fill: 'forwards' });
+    face.style.transform = `scale(2.2) rotate(${turn}deg)`;
+    tag.style.transform = 'translateY(30px)';
+  } else el.animate([
+    { transform: `translate(${sx}px, ${sy}px)` },
+    { transform: `translate(${(sx + tx) / 2}px, ${Math.min(sy, ty) - h * 0.18}px)`, offset: 0.55 },
+    { transform: `translate(${tx}px, ${ty}px)` },
+  ], { duration: flight, easing: 'cubic-bezier(.45,0,.75,1)', fill: 'forwards' });
+  if (!reducedMotion.matches) {
+    face.animate([
+      { transform: `scale(.4) rotate(${-40 * spin}deg)` },
+      { transform: `scale(2.2) rotate(${turn}deg)` },
+    ], { duration: flight, easing: 'ease-in', fill: 'forwards' });
+    // Keep the name just under the emoji as it grows.
+    tag.animate([{ transform: 'translateY(-16px)' }, { transform: 'translateY(30px)' }],
+      { duration: flight, easing: 'ease-in', fill: 'forwards' });
+  }
+
+  setTimeout(() => {
+    playEffect(t.hit);
+    el.classList.add('hit');
+    face.animate([
+      { transform: `scale(2.2) rotate(${turn}deg)` },
+      { transform: `scale(2.7, 1.6) rotate(${turn}deg)` },
+      { transform: `scale(2, 2.4) rotate(${turn}deg)` },
+      { transform: `scale(2.2) rotate(${turn}deg)` },
+    ], { duration: 260, easing: 'ease-out', fill: 'forwards' });
+    el.animate([
+      { transform: `translate(${tx}px, ${ty}px)`, opacity: 1 },
+      { transform: `translate(${tx}px, ${ty}px)`, opacity: 1, offset: 0.55 },
+      { transform: `translate(${tx}px, ${ty + 80}px)`, opacity: 0 },
+    ], { duration: 1400, easing: 'ease-in', fill: 'forwards' }).onfinish = () => el.remove();
+  }, flight);
 }
 
 // Hover shows the list on computers; tapping toggles it on phones.
@@ -340,6 +505,8 @@ async function ticketState(while_ = '') {
 
 function teardown() {
   watchersEl.hidden = true;
+  thrower.hidden = true;
+  closeEmojiMenu();
   watchersEl.classList.remove('open');
   if (resource) fetch(resource, { method: 'DELETE', keepalive: true }).catch(() => {});
   resource = null;
@@ -358,14 +525,16 @@ function unlockAudio() {
     gain.connect(actx.destination);
   }
   if (actx) actx.resume();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!fx && AC) {
+    fx = actx || new AC();
+    fxGain = fx.createGain();
+    fxGain.connect(fx.destination);
+    loadEffect('join-sound.wav');
+  }
+  if (fx) fx.resume();
   if (!video.srcObject) video.srcObject = new MediaStream();
   video.play().catch(() => {});
-  if (!actx && !joinAudio) {
-    // Safari only lets an element make sound later if it was played during a tap.
-    joinAudio = new Audio(base + 'join-sound.wav');
-    joinAudio.muted = true;
-    joinAudio.play().then(() => { joinAudio.pause(); joinAudio.muted = false; }).catch(() => { joinAudio.muted = false; });
-  }
   applyVolume();
 }
 
