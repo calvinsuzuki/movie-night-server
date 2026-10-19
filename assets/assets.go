@@ -50,6 +50,7 @@ var (
 // ViewerFiles are served next to the viewer page.
 func ViewerFiles() map[string][]byte {
 	files := map[string][]byte{
+		"icon.png":              Icon128, // the popcorn in the browser tab
 		"join-sound.wav":        JoinSound,
 		"background-full.jpg":   BackgroundFull,
 		"background-low.jpg":    BackgroundLow,
