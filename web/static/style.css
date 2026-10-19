@@ -195,4 +195,7 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid r
   #controls { gap: 8px; }
   #volLabel { display: none; }
   #quality .fps { display: none; }
+  /* No room for the live/offline pill next to the watcher count; phones
+     still see connecting and offline on the overlay screens. */
+  #state { display: none; }
 }
