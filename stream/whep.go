@@ -16,7 +16,7 @@ import (
 // link stops working when the share session ends:
 //
 //	GET    /s/{token}/                 viewer page (and its css/js)
-//	GET    /s/{token}/config           STUN/TURN servers and throwable emojis for the browser
+//	GET    /s/{token}/config           STUN/TURN servers, the host's name and throwable emojis
 //	POST   /s/{token}/join             {name} → {ticket}
 //	GET    /s/{token}/join/{ticket}    long-poll the sharer's answer (?while=watching: a kick)
 //	DELETE /s/{token}/join/{ticket}    withdraw the request
@@ -28,7 +28,7 @@ import (
 //
 // extra holds in-memory files served next to the page (sounds and
 // backgrounds).
-func Handler(h *Hub, l *Lobby, rx *Reactions, page fs.FS, extra map[string][]byte) http.Handler {
+func Handler(h *Hub, l *Lobby, rx *Reactions, host string, page fs.FS, extra map[string][]byte) http.Handler {
 	mux := http.NewServeMux()
 	files := http.FileServerFS(page)
 
@@ -39,7 +39,7 @@ func Handler(h *Hub, l *Lobby, rx *Reactions, page fs.FS, extra map[string][]byt
 		f := r.PathValue("file")
 		if f == "config" {
 			ice := h.ICE()
-			writeJSON(w, http.StatusOK, map[string]any{"iceServers": ice.Servers, "emojis": Emojis, "sounds": rx.Files()})
+			writeJSON(w, http.StatusOK, map[string]any{"iceServers": ice.Servers, "host": host, "emojis": Emojis, "sounds": rx.Files()})
 			return
 		}
 		if b, ok := extra[f]; ok {

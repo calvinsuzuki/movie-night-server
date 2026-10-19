@@ -638,6 +638,14 @@ async function updateStats() {
   ].join('\n');
 }
 
+// The tab title alternates "Movie night" / "Calvin streams" every 2 s (0.5 Hz).
+fetch(base + 'config', { cache: 'no-store' }).then((r) => r.json()).then((cfg) => {
+  if (!cfg.host) return;
+  const titles = ['Movie night', `${cfg.host} streams`];
+  let i = 0;
+  setInterval(() => { document.title = titles[i = 1 - i]; }, 2000);
+}).catch(() => { /* keeps "Movie night" */ });
+
 nameInput.value = store.get('name', '');
 show('askForm');
 setState('offline', 'bad');

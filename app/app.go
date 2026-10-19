@@ -10,8 +10,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,7 +135,7 @@ func (a *App) Start(ctx context.Context) error {
 	a.reactions = stream.NewReactions()
 	a.reactions.SetSounds(assets.SoundOdds())
 	a.hub, a.lobby = hub, lobby
-	a.handler = stream.Handler(hub, lobby, a.reactions, web.Files(), assets.ViewerFiles())
+	a.handler = stream.Handler(hub, lobby, a.reactions, hostName(), web.Files(), assets.ViewerFiles())
 
 	go a.forward(ctx, videoPort, "video")
 	go a.forward(ctx, audioPort, "audio")
@@ -222,6 +224,17 @@ func (a *App) stopNetwork() {
 		srv.Close()
 	}
 	a.hub.Close()
+}
+
+// hostName is this computer's user name, shown in viewers' tab titles.
+func hostName() string {
+	if u, err := user.Current(); err == nil {
+		n := u.Username[strings.LastIndexAny(u.Username, `\/`)+1:] // PC\Calvin → Calvin
+		if n != "" {
+			return n
+		}
+	}
+	return "The host"
 }
 
 func (a *App) forward(ctx context.Context, port int, kind string) {

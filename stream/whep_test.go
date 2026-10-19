@@ -12,7 +12,7 @@ func TestHandlerRules(t *testing.T) {
 	hub, _ := NewHub()
 	l := NewLobby()
 	page := fstest.MapFS{"index.html": {Data: []byte("viewer")}}
-	srv := httptest.NewServer(Handler(hub, l, NewReactions(), page, map[string][]byte{"join-sound.wav": []byte("RIFF")}))
+	srv := httptest.NewServer(Handler(hub, l, NewReactions(), "Host", page, map[string][]byte{"join-sound.wav": []byte("RIFF")}))
 	defer srv.Close()
 	token := l.Open()
 	s := srv.URL + "/s/" + token + "/"
