@@ -569,7 +569,10 @@ function wake() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => { if (pc && overlay.hidden) stage.classList.add('idle'); }, 3000);
 }
-['mousemove', 'touchstart', 'keydown'].forEach((ev) => stage.addEventListener(ev, wake, { passive: true }));
+// Any press counts, not just movement (clicking the throw button over and
+// over keeps the bar up). Capture phase, so buttons that stop their clicks
+// from bubbling still count.
+['mousemove', 'pointerdown', 'touchstart', 'keydown', 'wheel'].forEach((ev) => stage.addEventListener(ev, wake, { passive: true, capture: true }));
 
 // Keyboard: up/down volume, m mute, f fullscreen.
 document.addEventListener('keydown', (e) => {
