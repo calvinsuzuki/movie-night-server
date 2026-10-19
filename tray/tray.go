@@ -238,7 +238,7 @@ func (m *menu) onClick(item *systray.MenuItem, fn func()) {
 // Allow/Deny items work too; whichever is used first wins.
 func (m *menu) knock(r stream.Request) {
 	platform.PlaySound(assets.KnockSound)
-	answer, dismiss := platform.Ask(platform.AppName, fmt.Sprintf("“%s” wants to watch the movie.\n\nLet them in?", r.Name))
+	answer, dismiss := platform.Ask(platform.AppName, fmt.Sprintf("“%s” wants to watch the movie. Let them in?", r.Name))
 	m.mu.Lock()
 	m.popups[r.Ticket] = dismiss
 	m.mu.Unlock()

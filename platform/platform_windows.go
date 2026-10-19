@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
-	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -137,10 +135,9 @@ func Alert(msg string) {
 }
 
 var (
-	winmm                 = windows.NewLazySystemDLL("winmm.dll")
-	procPlaySound         = winmm.NewProc("PlaySoundW")
-	procEnumThreadWindows = user32.NewProc("EnumThreadWindows")
-	procPostMessage       = user32.NewProc("PostMessageW")
+	winmm           = windows.NewLazySystemDLL("winmm.dll")
+	procPlaySound   = winmm.NewProc("PlaySoundW")
+	procPostMessage = user32.NewProc("PostMessageW")
 )
 
 // PlaySound plays a WAV file held in memory, without waiting. wav must stay
@@ -152,41 +149,4 @@ func PlaySound(wav []byte) {
 	}
 	const sndAsync, sndNoDefault, sndMemory = 0x1, 0x2, 0x4
 	procPlaySound.Call(uintptr(unsafe.Pointer(&wav[0])), 0, sndAsync|sndNoDefault|sndMemory)
-}
-
-const idYes, idNo = 6, 7
-
-// closeDialog answers "No" on a popup window so its thread returns; Ask then
-// reports nothing, because the popup was dismissed rather than answered.
-var closeDialog = syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
-	const wmCommand = 0x0111
-	procPostMessage.Call(hwnd, wmCommand, idNo, 0)
-	return 1
-})
-
-// Ask shows a Yes/No popup on top of everything without blocking. answer
-// gets true (Yes) or false (No) when the user clicks; dismiss closes the
-// popup without an answer.
-func Ask(title, msg string) (answer <-chan bool, dismiss func()) {
-	ch := make(chan bool, 1)
-	tid := make(chan uint32, 1)
-	var dismissed atomic.Bool
-	go func() {
-		runtime.LockOSThread() // the dialog belongs to this thread
-		defer runtime.UnlockOSThread()
-		tid <- windows.GetCurrentThreadId()
-		t, _ := windows.UTF16PtrFromString(title)
-		m, _ := windows.UTF16PtrFromString(msg)
-		const mbYesNo, mbIconQuestion, mbSetForeground, mbTopmost = 0x4, 0x20, 0x10000, 0x40000
-		r, _ := windows.MessageBox(0, m, t, mbYesNo|mbIconQuestion|mbSetForeground|mbTopmost)
-		if !dismissed.Load() {
-			ch <- r == idYes
-		}
-	}()
-	thread := <-tid
-	return ch, func() {
-		if !dismissed.Swap(true) {
-			procEnumThreadWindows.Call(uintptr(thread), closeDialog, 0)
-		}
-	}
 }
