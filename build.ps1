@@ -48,6 +48,9 @@ function Get-Cloudflared($name) {
 
 if (-not (Test-Path assets\icon.ico)) { Step "Drawing icons"; go run ./tools/genicon; Check }
 
+Step "Checking assets\sounds.json"
+go test ./assets/; Check
+
 Remove-Item -Recurse -Force dist\windows, dist\linux -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force dist\windows, dist\linux | Out-Null
 

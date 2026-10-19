@@ -64,6 +64,9 @@ get_cloudflared() { # prints the cached, verified path
 
 [ -f assets/icon.ico ] || { step "Drawing icons"; go run ./tools/genicon; }
 
+step "Checking assets/sounds.json"
+go test ./assets/
+
 rm -rf dist/windows dist/linux
 mkdir -p dist/windows dist/linux
 
