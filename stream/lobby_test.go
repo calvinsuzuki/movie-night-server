@@ -52,6 +52,55 @@ func TestLobbyApproval(t *testing.T) {
 	}
 }
 
+func TestLobbyRejoin(t *testing.T) {
+	l := NewLobby()
+	l.Open()
+	tk, _ := l.Join("Ana", "1.1.1.1")
+	l.Allow(tk)
+	l.Use(tk)
+	l.Attach(tk, "v1")
+
+	// Same IP and name while still watching (a reload): straight in.
+	again, _ := l.Join("Ana", "1.1.1.1")
+	if s := l.State(again); s != Allowed {
+		t.Fatalf("reload while watching: %s", s)
+	}
+	// After leaving, within the window: straight in, no request shown.
+	l.Gone("v1")
+	back, _ := l.Join("Ana", "2.2.2.2") // a different IP is someone else
+	if s := l.State(back); s != Pending {
+		t.Fatalf("other IP: %s", s)
+	}
+	l.Deny(back)
+	back, _ = l.Join("Ana", "1.1.1.1")
+	if s := l.State(back); s != Allowed {
+		t.Fatalf("back within the window: %s", s)
+	}
+	if rs := l.Requests(); len(rs) != 0 {
+		t.Fatalf("returning viewer shown as a request: %+v", rs)
+	}
+	// Past the window: ask again.
+	l.mu.Lock()
+	l.seen[seenKey(Request{IP: "1.1.1.1", Name: "Ana"})] = time.Now().Add(-rejoinWindow - time.Second)
+	l.mu.Unlock()
+	late, _ := l.Join("Ana", "1.1.1.1")
+	if s := l.State(late); s != Pending {
+		t.Fatalf("after the window: %s", s)
+	}
+
+	// Kicked viewers have to ask again.
+	l2 := NewLobby()
+	l2.Open()
+	k, _ := l2.Join("Eve", "3.3.3.3")
+	l2.Allow(k)
+	l2.Use(k)
+	l2.Attach(k, "v2")
+	l2.Kicked("v2")
+	if again, _ := l2.Join("Eve", "3.3.3.3"); l2.State(again) != Pending {
+		t.Fatalf("kicked viewer got straight back in")
+	}
+}
+
 func TestLobbyLimits(t *testing.T) {
 	l := NewLobby()
 	l.Open()

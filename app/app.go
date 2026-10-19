@@ -130,6 +130,9 @@ func (a *App) Start(ctx context.Context) error {
 			a.OnRequest(r)
 		}
 	}
+	lobby.OnReturn = func(r stream.Request) {
+		log.Printf("%s (%s) is back within 2 minutes: let in without asking", r.Name, r.IP)
+	}
 	hub.OnViewers = a.notify
 	hub.OnLeave = lobby.Gone
 	a.reactions = stream.NewReactions()

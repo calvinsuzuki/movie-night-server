@@ -71,7 +71,7 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 |  | Feature | What it means for you |
 | :---: | --- | --- |
 | 🔗 | **One private link** | Click *Start sharing*, then *Copy invite link*. The link has a long secret part and stops working the moment you stop sharing. |
-| 🚪 | **You hold the door** | Every friend knocks first. A popup with a chime asks you to let them in, and you can kick anyone later. |
+| 🚪 | **You hold the door** | Every friend knocks first. A popup with a chime asks you to let them in, and you can kick anyone later. Someone you let in who comes back within 2 minutes (same name, same internet address), say after a reload, walks straight in. |
 | 🌍 | **Any browser, any device** | Friends need nothing but the link: phones, tablets and computers all work, iPhone included. |
 | 🔊 | **Pick which sounds to share** | Share all apps or only the ones you tick (say, just the browser or VLC). |
 | 🎙️ | **Voice chat stays private** | **Discord and TeamSpeak are never shared**, so nobody hears themselves echoed back. |

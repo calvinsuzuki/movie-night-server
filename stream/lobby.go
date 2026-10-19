@@ -23,8 +23,9 @@ const (
 const (
 	maxPending   = 5
 	askTimeout   = 2 * time.Minute
-	allowedTTL   = time.Minute // to use the pass after Allow
-	perIPLimit   = 3           // join requests per IP per minute
+	allowedTTL   = time.Minute     // to use the pass after Allow
+	rejoinWindow = 2 * time.Minute // someone let in who left this recently comes back without asking
+	perIPLimit   = 3               // join requests per IP per minute
 	forgetAfter  = 10 * time.Minute
 	maxNameRunes = 20
 )
@@ -57,15 +58,20 @@ type Lobby struct {
 	approve bool
 	tickets map[string]*ticket
 	byIP    map[string][]time.Time
+	// seen remembers who was let in, by IP and name, and when they were last
+	// watching, so they can come back (reload, closed tab) without asking.
+	seen map[string]time.Time
 
 	// OnChange is called when requests or decisions change; OnRequest also
-	// fires for each new request, so the sharer can be notified.
+	// fires for each new request, so the sharer can be notified, and OnReturn
+	// for someone let back in without asking.
 	OnChange  func()
 	OnRequest func(Request)
+	OnReturn  func(Request)
 }
 
 func NewLobby() *Lobby {
-	l := &Lobby{tickets: map[string]*ticket{}, byIP: map[string][]time.Time{}, approve: true}
+	l := &Lobby{tickets: map[string]*ticket{}, byIP: map[string][]time.Time{}, seen: map[string]time.Time{}, approve: true}
 	go l.janitor()
 	return l
 }
@@ -94,6 +100,7 @@ func (l *Lobby) Close() int {
 	}
 	l.tickets = map[string]*ticket{}
 	l.byIP = map[string][]time.Time{}
+	l.seen = map[string]time.Time{}
 	l.mu.Unlock()
 	l.changed()
 	return told
@@ -118,6 +125,9 @@ func (l *Lobby) Join(name, ip string) (string, error) {
 	name = cleanName(name)
 	now := time.Now()
 	l.mu.Lock()
+	t := &ticket{Request: Request{Ticket: newToken(), Name: name, IP: ip, At: now}, state: Pending, wake: make(chan struct{})}
+	// Someone coming back raises no popup, so the spam limits don't apply.
+	back := l.approve && l.returning(t, now)
 	recent := l.byIP[ip][:0]
 	for _, at := range l.byIP[ip] {
 		if now.Sub(at) < time.Minute {
@@ -131,24 +141,45 @@ func (l *Lobby) Join(name, ip string) (string, error) {
 			pending++
 		}
 	}
-	if len(recent) >= perIPLimit || pending >= maxPending {
+	if !back && (len(recent) >= perIPLimit || pending >= maxPending) {
 		l.mu.Unlock()
 		return "", ErrBusy
 	}
-	l.byIP[ip] = append(recent, now)
-	t := &ticket{Request: Request{Ticket: newToken(), Name: name, IP: ip, At: now}, state: Pending, wake: make(chan struct{})}
+	if !back {
+		l.byIP[ip] = append(recent, now)
+	}
 	l.tickets[t.Ticket] = t
-	if !l.approve {
+	if !l.approve || back {
 		l.set(t, Allowed)
 	}
-	ask := l.approve
+	ask := l.approve && !back
 	l.mu.Unlock()
 	if ask && l.OnRequest != nil {
 		l.OnRequest(t.Request)
 	}
+	if back && l.OnReturn != nil {
+		l.OnReturn(t.Request)
+	}
 	l.changed()
 	return t.Ticket, nil
 }
+
+// returning reports whether t's IP and name were let in and watching within
+// rejoinWindow (or still are, say a reload before the old page's connection
+// timed out); l.mu must be held.
+func (l *Lobby) returning(t *ticket, now time.Time) bool {
+	if at, ok := l.seen[seenKey(t.Request)]; ok && now.Sub(at) < rejoinWindow {
+		return true
+	}
+	for _, o := range l.tickets {
+		if o.state == Watching && seenKey(o.Request) == seenKey(t.Request) {
+			return true
+		}
+	}
+	return false
+}
+
+func seenKey(r Request) string { return r.IP + "\x00" + r.Name }
 
 // Wait returns the ticket's state once it differs from while (usually
 // Pending), or after timeout (long polling). Unknown tickets report Stopped.
@@ -207,6 +238,7 @@ func (l *Lobby) Use(id string) (Request, error) {
 		return Request{}, ErrNoTicket
 	}
 	l.set(t, Watching)
+	l.seen[seenKey(t.Request)] = time.Now()
 	return t.Request, nil
 }
 
@@ -246,6 +278,11 @@ func (l *Lobby) ended(viewer, state string) {
 	for _, t := range l.tickets {
 		if t.viewer == viewer && t.state == Watching {
 			l.set(t, state)
+			if state == Kicked {
+				delete(l.seen, seenKey(t.Request)) // kicked means ask again
+			} else {
+				l.seen[seenKey(t.Request)] = time.Now() // the 2 minutes start now
+			}
 		}
 	}
 	l.mu.Unlock()
@@ -296,6 +333,11 @@ func (l *Lobby) janitor() {
 				changed = true
 			case t.state != Pending && t.state != Allowed && t.state != Watching && now.Sub(t.decided) > forgetAfter:
 				delete(l.tickets, id)
+			}
+		}
+		for k, at := range l.seen {
+			if now.Sub(at) > rejoinWindow {
+				delete(l.seen, k)
 			}
 		}
 		l.mu.Unlock()
