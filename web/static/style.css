@@ -66,7 +66,23 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid r
 #controls button { width: 40px; height: 40px; flex: none; border: 0; border-radius: 50%;
   background: var(--panel); color: var(--fg); display: grid; place-items: center; cursor: pointer; }
 #controls button svg { width: 22px; height: 22px; fill: currentColor; }
-#vol { width: min(220px, 40vw); accent-color: var(--accent); }
+/* Volume: butter to red as it gets louder (--fill is set from app.js). */
+#vol { --fill: 80%; width: min(220px, 40vw); height: 22px; margin: 0; background: transparent;
+  -webkit-appearance: none; appearance: none; cursor: pointer; }
+#vol::-webkit-slider-runnable-track { height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, transparent var(--fill), rgba(255,255,255,.22) var(--fill)),
+    linear-gradient(90deg, var(--butter), var(--red)); }
+#vol::-moz-range-track { height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, transparent var(--fill), rgba(255,255,255,.22) var(--fill)),
+    linear-gradient(90deg, var(--butter), var(--red)); }
+/* The knob takes the track's color under it: butter when quiet, red when loud. */
+#vol::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px;
+  border: 2px solid var(--salt); border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,.5);
+  background: var(--salt); background: color-mix(in srgb, var(--red) var(--fill), var(--butter)); }
+#vol::-moz-range-thumb { width: 14px; height: 14px; border: 2px solid var(--salt); border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+  background: var(--salt); background: color-mix(in srgb, var(--red) var(--fill), var(--butter)); }
+#vol:focus-visible { outline: 2px solid var(--butter); outline-offset: 4px; border-radius: 999px; }
 #volLabel { width: 3.2em; color: var(--muted); font-variant-numeric: tabular-nums; }
 .spacer { flex: 1; }
 

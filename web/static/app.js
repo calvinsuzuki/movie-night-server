@@ -28,6 +28,7 @@ function applyVolume() {
   if (gain) gain.gain.value = g;
   else { video.volume = Math.min(1, g); video.muted = muted || !joined; }
   vol.value = volume;
+  vol.style.setProperty('--fill', `${muted ? 0 : volume}%`);
   volLabel.textContent = muted ? 'muted' : `${volume}%`;
   $('muteIcon').setAttribute('d', muted
     ? 'M16.5 12A4.5 4.5 0 0 0 14 8v2.2l2.5 2.5V12zM19 12c0 .9-.2 1.8-.5 2.6l1.5 1.5A8.9 8.9 0 0 0 21 12a9 9 0 0 0-7-8.8v2.1a7 7 0 0 1 5 6.7zM4.3 3 3 4.3 7.7 9H3v6h4l5 5v-6.7l4.3 4.3a7 7 0 0 1-2.3 1.2v2.1a9 9 0 0 0 3.7-1.9l2 2 1.3-1.3L4.3 3zM12 4 9.9 6.1 12 8.2V4z'
