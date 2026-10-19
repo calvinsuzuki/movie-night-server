@@ -76,7 +76,7 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 | 🔊 | **Pick which sounds to share** | Share all apps or only the ones you tick (say, just the browser or VLC). |
 | 🎙️ | **Voice chat stays private** | **Discord and TeamSpeak are never shared**, so nobody hears themselves echoed back. |
 | 🎚️ | **Everyone has their own volume** | Each friend has a slider that only changes their own volume. |
-| 👥 | **See who's watching** | A count in the corner of the page; hover or tap it for names. Friends hear a chime when someone joins. |
+| 👥 | **See who's watching** | A count in the corner of the page; hover or tap it for names. When someone joins, friends hear a chime and see a 🍿 *"Ana joined!"* bubble. |
 | 🎞️ | **Quality presets** | 480p, 720p or 1080p at 24 fps, plus an advanced bitrate picker from 500 kbps to 8 Mbps. |
 | ⚡ | **Low delay** | WebRTC peer-to-peer, typically 0.2–0.5 s behind your screen. |
 | 🛰️ | **IPv4 and IPv6** | Connects over IPv6 when both sides have it, which gets around strict carrier NAT. |

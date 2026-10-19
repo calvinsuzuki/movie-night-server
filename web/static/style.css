@@ -124,6 +124,19 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid r
 .pill.warn { color: var(--warn); }
 .pill.bad { color: var(--salt); background: linear-gradient(var(--red), var(--red-deep)); }
 
+/* "Ana joined!" speech bubbles, bottom left above the watcher count. They stay
+   visible while the controls are hidden. */
+#joined { position: absolute; left: max(16px, env(safe-area-inset-left));
+  bottom: calc(68px + env(safe-area-inset-bottom)); display: flex; flex-direction: column-reverse;
+  align-items: flex-start; gap: 8px; pointer-events: none; }
+.bubble { position: relative; max-width: min(300px, 80vw); padding: 9px 14px; border-radius: 16px 16px 16px 4px;
+  background: var(--butter); color: var(--theater); font-weight: 600; box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pop .25s ease-out; transition: opacity .4s, transform .4s; }
+.bubble::before { content: "🍿 "; }
+.bubble.leaving { opacity: 0; transform: translateY(6px); }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.9); } }
+@media (prefers-reduced-motion: reduce) { .bubble { animation: none; transition: none; } }
+
 /* Quality and ping, top right, fading out with the controls. */
 #quality { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right));
   display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 999px; background: var(--panel);

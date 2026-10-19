@@ -259,9 +259,23 @@ function renderWatchers(list) {
   watchersEl.hidden = false;
 }
 
-// Long-polls the watcher list; rings when someone new starts watching.
+// "Ana joined!" in a speech bubble for a few seconds.
+const joinedEl = $('joined');
+function joinedBubble(name) {
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = `${name} joined!`; // names come from other people: never as HTML
+  joinedEl.append(b);
+  while (joinedEl.children.length > 3) joinedEl.firstChild.remove();
+  setTimeout(() => { b.classList.add('leaving'); setTimeout(() => b.remove(), 400); }, 4000);
+}
+
+// Long-polls the watcher list; rings and shows a bubble when someone new
+// starts watching. Someone back within a minute of dropping out (a network
+// blip) reconnects quietly.
 async function watchWatchers(conn) {
-  let version = '', known = null;
+  let version = '', known = null, names = new Set();
+  const gone = new Map(); // name → when they left
   while (conn === pc) {
     let data;
     try {
@@ -271,8 +285,16 @@ async function watchWatchers(conn) {
     } catch { if (conn !== pc) return; await delay(3000); continue; }
     if (conn !== pc) return;
     const ids = new Set(data.watchers.map((w) => w.name + '|' + w.since));
-    if (known && data.watchers.some((w) => !w.you && !known.has(w.name + '|' + w.since))) joinSound();
+    const now = Date.now(), current = new Set(data.watchers.map((w) => w.name));
+    for (const n of names) if (!current.has(n)) gone.set(n, now);
+    if (known) {
+      const fresh = data.watchers.filter((w) => !w.you && !known.has(w.name + '|' + w.since)
+        && !(now - (gone.get(w.name) || 0) < 60000) && !names.has(w.name));
+      if (fresh.length) joinSound();
+      fresh.forEach((w) => joinedBubble(w.name));
+    }
     known = ids;
+    names = current;
     version = data.version;
     renderWatchers(data.watchers);
   }
