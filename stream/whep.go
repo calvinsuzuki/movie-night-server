@@ -24,7 +24,8 @@ import (
 //	DELETE /s/{token}/whep/{id}        leave
 //	GET    /s/{token}/watchers         who's watching (?ticket=, long-poll with ?since=)
 //
-// extra holds in-memory files served next to the page (the join sound).
+// extra holds in-memory files served next to the page (the join sound and
+// backgrounds).
 func Handler(h *Hub, l *Lobby, page fs.FS, extra map[string][]byte) http.Handler {
 	mux := http.NewServeMux()
 	files := http.FileServerFS(page)
@@ -40,6 +41,7 @@ func Handler(h *Hub, l *Lobby, page fs.FS, extra map[string][]byte) http.Handler
 			return
 		}
 		if b, ok := extra[f]; ok {
+			w.Header().Set("Cache-Control", "private, max-age=86400")
 			http.ServeContent(w, r, f, time.Time{}, bytes.NewReader(b))
 			return
 		}

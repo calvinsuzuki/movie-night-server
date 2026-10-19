@@ -29,10 +29,30 @@ var (
 	//go:embed join-sound.wav
 	JoinSound []byte
 
+	// Backgrounds of the viewer page's name and goodbye screens: full for
+	// computers (with low, the same picture smaller, shown while it loads)
+	// and mobile for phones held upright.
+	//go:embed background-full.jpg
+	BackgroundFull []byte
+	//go:embed background-low.jpg
+	BackgroundLow []byte
+	//go:embed background-mobile.jpg
+	BackgroundMobile []byte
+
 	// Guide is the "How it works" page; {{ICON}} is replaced with Icon128.
 	//go:embed guide.html
 	Guide []byte
 )
+
+// ViewerFiles are served next to the viewer page.
+func ViewerFiles() map[string][]byte {
+	return map[string][]byte{
+		"join-sound.wav":        JoinSound,
+		"background-full.jpg":   BackgroundFull,
+		"background-low.jpg":    BackgroundLow,
+		"background-mobile.jpg": BackgroundMobile,
+	}
+}
 
 // Tray icon variants.
 const (

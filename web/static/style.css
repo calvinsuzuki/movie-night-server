@@ -14,8 +14,8 @@
   --live: #3ccf7a;
   --warn: var(--butter);
   --bad: var(--red);
-  --bucket: repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 48px, transparent 48px 96px),
-    radial-gradient(120% 85% at 50% 0%, var(--red) 0%, var(--red-deep) 48%, var(--theater) 100%);
+  /* Keeps text readable over the backdrop picture. */
+  --shade: radial-gradient(closest-side, rgba(0,0,0,.6), rgba(0,0,0,0)) center / min(720px, 100%) 75% no-repeat;
 }
 
 * { box-sizing: border-box; }
@@ -28,8 +28,24 @@ html, body { height: 100%; margin: 0; background: var(--theater); color: var(--f
 
 #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px; background: rgba(0,0,0,.55); }
-/* The join and goodbye screens sit on the bucket gradient. */
-#overlay.bucket { background: var(--bucket); }
+/* The name and goodbye screens sit on the movie-night backdrop. Computers get
+   the wide picture, with its smaller copy showing until the full one loads;
+   phones held upright get the tall one. */
+#overlay.backdrop {
+  background: var(--shade),
+    url(background-full.jpg) center / cover no-repeat,
+    url(background-low.jpg) center / cover no-repeat,
+    var(--theater);
+}
+@media (orientation: portrait) {
+  /* The tall picture is empty and dark in its upper middle; sit there. */
+  #overlay.backdrop {
+    justify-content: flex-start; padding-top: max(16vh, 48px);
+    background: radial-gradient(closest-side, rgba(0,0,0,.6), rgba(0,0,0,0)) center 22% / 100% 50% no-repeat,
+      url(background-mobile.jpg) center bottom / cover no-repeat,
+      var(--theater);
+  }
+}
 #brand { margin: 0 0 8px; font-weight: 700; font-size: clamp(28px, 6vw, 44px); letter-spacing: -0.01em; color: var(--fg); }
 .screen { display: flex; flex-direction: column; align-items: center; gap: 14px; width: min(360px, 100%); padding: 0 16px; }
 .screen[hidden] { display: none; }
@@ -106,7 +122,7 @@ button.secondary { padding: 10px 22px; border-radius: 999px; border: 1px solid r
 .pill { padding: 3px 10px; border-radius: 999px; background: var(--panel); font-size: 13px; color: var(--muted); }
 .pill.live { color: var(--live); }
 .pill.warn { color: var(--warn); }
-.pill.bad { color: var(--salt); background: var(--red); }
+.pill.bad { color: var(--salt); background: linear-gradient(var(--red), var(--red-deep)); }
 
 /* Quality and ping, top right, fading out with the controls. */
 #quality { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right));

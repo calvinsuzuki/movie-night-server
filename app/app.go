@@ -130,7 +130,7 @@ func (a *App) Start(ctx context.Context) error {
 	hub.OnViewers = a.notify
 	hub.OnLeave = lobby.Gone
 	a.hub, a.lobby = hub, lobby
-	a.handler = stream.Handler(hub, lobby, web.Files(), map[string][]byte{"join-sound.wav": assets.JoinSound})
+	a.handler = stream.Handler(hub, lobby, web.Files(), assets.ViewerFiles())
 
 	go a.forward(ctx, videoPort, "video")
 	go a.forward(ctx, audioPort, "audio")

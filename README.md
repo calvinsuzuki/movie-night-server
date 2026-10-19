@@ -282,9 +282,9 @@ Movie night is dressed like a popcorn bucket: butter on red stripes, in a dark t
 
 | Swatch | Hex | Name | Where it shows up |
 | :---: | --- | --- | --- |
-| <img src="https://img.shields.io/badge/-%23f8de8d-f8de8d?style=for-the-badge" alt="#f8de8d"> | `#f8de8d` | 🧈 Butter | Buttons, sliders, headings, the "good enough" ping dot |
-| <img src="https://img.shields.io/badge/-%23ab1313-ab1313?style=for-the-badge" alt="#ab1313"> | `#ab1313` | 🍿 Bucket red | The gradient behind the join and goodbye screens, "offline" and bad-ping badges |
-| <img src="https://img.shields.io/badge/-%23901010-901010?style=for-the-badge" alt="#901010"> | `#901010` | 🎟️ Deep red | The darker half of the gradient and the bucket stripes |
+| <img src="https://img.shields.io/badge/-%23f8de8d-f8de8d?style=for-the-badge" alt="#f8de8d"> | `#f8de8d` | 🧈 Butter | Buttons, headings, the quiet end of the volume slider, the "good enough" ping dot |
+| <img src="https://img.shields.io/badge/-%23ab1313-ab1313?style=for-the-badge" alt="#ab1313"> | `#ab1313` | 🍿 Bucket red | The loud end of the volume slider, "offline" and bad-ping badges |
+| <img src="https://img.shields.io/badge/-%23901010-901010?style=for-the-badge" alt="#901010"> | `#901010` | 🎟️ Deep red | The shaded bottom of red badges |
 | <img src="https://img.shields.io/badge/-%23ffffff-ffffff?style=for-the-badge" alt="#ffffff"> | `#ffffff` | 🧂 Salt | Text |
 | <img src="https://img.shields.io/badge/-%23000000-000000?style=for-the-badge" alt="#000000"> | `#000000` | 🎬 Theater | The stage behind the movie, text on butter buttons |
 
