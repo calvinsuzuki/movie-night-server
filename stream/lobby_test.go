@@ -105,7 +105,8 @@ func TestCleanName(t *testing.T) {
 		"":              "A friend",
 		"  a\tb  ":      "a b",
 		"evil\u202eexe": "evilexe",
-		"0123456789012345678901234567890123456789": "01234567890123456789012345678901",
+		"0123456789012345678901234567890123456789": "01234567890123456789",
+		"Bruno the very long name":                 "Bruno the very long", // no trailing space after the cut
 	} {
 		if got := cleanName(in); got != want {
 			t.Errorf("cleanName(%q) = %q, want %q", in, got, want)

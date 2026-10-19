@@ -26,7 +26,7 @@ const (
 	allowedTTL   = time.Minute // to use the pass after Allow
 	perIPLimit   = 3           // join requests per IP per minute
 	forgetAfter  = 10 * time.Minute
-	maxNameRunes = 32
+	maxNameRunes = 20
 )
 
 var (
@@ -317,7 +317,7 @@ func cleanName(s string) string {
 	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > maxNameRunes {
-		s = string(r[:maxNameRunes])
+		s = strings.TrimSpace(string(r[:maxNameRunes]))
 	}
 	if s == "" {
 		s = "A friend"
