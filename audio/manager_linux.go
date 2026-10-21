@@ -49,8 +49,10 @@ func NewManager(p Policy) (*Manager, error) {
 		return nil, fmt.Errorf("create sink: %w", err)
 	}
 	m.modules = append(m.modules, sink)
+	// 20 ms underran constantly on a USB sink whose own latency was ~30 ms,
+	// making the sharer's sound choppy; 60 ms plays clean and stays in lip sync.
 	loop, err := pactl("load-module", "module-loopback", "source="+sinkName+".monitor",
-		"latency_msec=20", "source_dont_move=true")
+		"latency_msec=60", "source_dont_move=true")
 	if err != nil {
 		m.Close()
 		return nil, fmt.Errorf("create loopback: %w", err)
