@@ -35,6 +35,12 @@ func main() {
 		return
 	}
 
+	// Before the log is opened: a second copy would wipe the running one's.
+	if !*listMonitors && !platform.SingleInstance() {
+		platform.Alert("Movie night is already running.\nLook for the popcorn icon in the taskbar tray.")
+		return
+	}
+
 	dir := platform.ConfigDir()
 	os.MkdirAll(dir, 0o755)
 	logPath := filepath.Join(dir, "movienight.log")
@@ -44,11 +50,6 @@ func main() {
 	}
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.Printf("Movie night %s on %s", version, platform.Describe())
-
-	if !*listMonitors && !platform.SingleInstance() {
-		platform.Alert("Movie night is already running.\nLook for the popcorn icon in the taskbar tray.")
-		return
-	}
 
 	ffmpeg, err := findFFmpeg()
 	if err != nil {
