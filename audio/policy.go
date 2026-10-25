@@ -1,9 +1,8 @@
 // Package audio decides which applications' sound is shared and captures it.
 //
 // Windows: one per-process loopback capture per allowed app, mixed in-process.
-// Linux:   allowed apps are routed into a PulseAudio null sink (looped back to
-//
-//	the speakers) whose monitor ffmpeg records.
+// Linux:   one PulseAudio stream monitor (parec) per allowed app's stream,
+// mixed in-process.
 package audio
 
 import (

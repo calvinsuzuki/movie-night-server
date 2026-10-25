@@ -91,6 +91,9 @@ func Run(a *app.App, logPath string) {
 	systray.Run(m.build, func() {})
 }
 
+// Quit closes the tray, making Run return.
+func Quit() { systray.Quit() }
+
 func (m *menu) build() {
 	systray.SetIcon(assets.Tray(assets.TrayIdle))
 	systray.SetTitle("")
@@ -118,8 +121,7 @@ func (m *menu) build() {
 }
 
 func (m *menu) buildNative() {
-	m.status = systray.AddMenuItem(platform.AppName, "")
-	m.status.Disable()
+	m.status = systray.AddMenuItem(platform.AppName, "Click to copy the invite link")
 	m.copyLink = systray.AddMenuItem("Copy invite link", "Send this link to your friends")
 	m.openPage = systray.AddMenuItem("Open viewer page", "")
 	m.share = systray.AddMenuItem("Start sharing", "")
@@ -228,7 +230,9 @@ func (m *menu) buildNative() {
 		})
 	}
 
-	network := systray.AddMenuItem("Network", "How friends reach you")
+	systray.AddSeparator()
+	advanced := systray.AddMenuItem("Advanced", "Everything you set once")
+	network := advanced.AddSubMenuItem("Network", "How friends reach you")
 	m.netInternet = network.AddSubMenuItemCheckbox("Internet link (anyone you let in)", "A private link through Cloudflare; video goes directly to each friend", false)
 	m.onClick(m.netInternet, func() { m.a.SetLocal(nil) })
 	for i := 0; i < addrSlots; i++ {
@@ -255,14 +259,20 @@ func (m *menu) buildNative() {
 	m.relay = network.AddSubMenuItem("Relay server settings…", "Opens config.json; used from the next Start sharing")
 	m.onClick(m.relay, func() { platform.Open(m.a.ConfigPath()) })
 
-	systray.AddSeparator()
-	m.askAlone = systray.AddMenuItemCheckbox("Ask to stop when nobody's watching", "After 2 minutes of sharing to nobody", true)
+	m.askAlone = advanced.AddSubMenuItemCheckbox("Ask to stop when nobody's watching", "After 2 minutes of sharing to nobody", true)
 	m.onClick(m.askAlone, func() { m.a.SetAskWhenAlone(!m.a.Config().AskWhenAlone) })
-	m.autostart = systray.AddMenuItemCheckbox(platform.AutostartLabel(), "", platform.AutostartEnabled())
-	m.guide = systray.AddMenuItem("How it works", "Inviting friends, the relay, Tailscale mode")
-	m.openLog = systray.AddMenuItem("Open log", m.logPath)
+	m.autostart = advanced.AddSubMenuItemCheckbox(platform.AutostartLabel(), "", platform.AutostartEnabled())
+	m.guide = advanced.AddSubMenuItem("How it works", "Inviting friends, the relay, local addresses")
+	m.openLog = advanced.AddSubMenuItem("Open log", m.logPath)
+	systray.AddSeparator()
 	m.quit = systray.AddMenuItem("Quit "+platform.AppName, "")
 
+	// While sharing, the status line is the link: a click copies it.
+	m.onClick(m.status, func() {
+		if m.a.State().URL != "" {
+			m.copy()
+		}
+	})
 	m.onClick(m.copyLink, func() {
 		if !m.copy() {
 			return
@@ -327,7 +337,7 @@ func (m *menu) copy() bool {
 	m.mu.Lock()
 	m.copiedUntil = time.Now().Add(2 * time.Second)
 	m.mu.Unlock()
-	time.AfterFunc(2*time.Second, ui.RefreshMenu)
+	time.AfterFunc(2*time.Second, m.refresh)
 	return true
 }
 
@@ -466,22 +476,6 @@ func setVisible(item *systray.MenuItem, on bool) {
 
 func watchingText(n int) string { return fmt.Sprintf("%d watching", n) }
 
-// statusLine is the menu's one-line summary.
-func statusLine(st app.State) string {
-	watching := watchingText(len(st.Viewers))
-	switch {
-	case st.Status != "":
-		return "⚠ " + st.Status
-	case !st.Sharing:
-		return "Not sharing"
-	case st.URL == "":
-		return "Creating your link…"
-	case st.Paused:
-		return "❚❚ Paused · " + watching
-	}
-	return "● Sharing · " + watching
-}
-
 // overlayText is the overlay's pill: how many are watching, or why nobody can yet.
 func overlayText(st app.State) string {
 	n := len(st.Viewers)
@@ -576,7 +570,8 @@ func (m *menu) refresh() {
 // refreshNative updates the system menu's items; m.mu must be held.
 func (m *menu) refreshNative(st app.State) {
 	cfg := st.Config
-	m.status.SetTitle(statusLine(st))
+	m.status.SetTitle(headerLine(st, time.Now().Before(m.copiedUntil)))
+	setEnabled(m.status, st.Sharing && st.URL != "")
 	setEnabled(m.copyLink, st.URL != "")
 	setEnabled(m.openPage, st.URL != "")
 	if st.Sharing {

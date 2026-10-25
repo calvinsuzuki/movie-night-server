@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"movienight/app"
 	"movienight/platform"
@@ -78,14 +79,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Ctrl+C, logging out or `kill` shut down cleanly, like Quit.
+	sig, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
 	if *headless {
 		log.Print("headless: anyone with the link gets in")
 		a.SkipApprovalThisRun()
 		a.StartSharing()
-		sig, stop := signal.NotifyContext(ctx, os.Interrupt)
-		defer stop()
 		<-sig.Done()
 	} else {
+		go func() {
+			<-sig.Done()
+			tray.Quit()
+		}()
 		tray.Run(a, logPath)
 	}
 	log.Print("shutting down")

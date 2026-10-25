@@ -4,8 +4,9 @@
 // painted in the viewer page's colors, never take focus from the movie, and
 // are left out of the screen capture, so friends never see them.
 //
-// Other systems have no custom UI yet: Supported reports false and the
-// functions do nothing.
+// Other systems keep the system menu: Supported reports false, Toast is a
+// desktop notification and the rest do nothing. X11 can't leave a window out
+// of the capture, so an overlay there would be streamed to friends.
 package ui
 
 import "time"

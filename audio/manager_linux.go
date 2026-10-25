@@ -14,66 +14,60 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"movienight/platform"
 )
 
-// On Linux allowed apps are moved into a "movienight" null sink. A loopback
-// plays that sink on the real speakers so the sharer still hears everything,
-// and ffmpeg records the sink's monitor. Blocked/unselected apps stay on the
-// normal output and never reach the stream. Works with PulseAudio and
-// PipeWire's pulse server (Ubuntu 22.04+).
-const sinkName = "movienight"
+// On Linux each allowed app's stream (PulseAudio sink input) is recorded on
+// its own with `parec --monitor-stream`, and the streams are mixed
+// in-process, as on Windows. Apps stay on the speakers they were on, so the
+// sharer hears them untouched, and nothing is left behind in the sound
+// server if Movie night is killed: the parec helpers die with it. Works with
+// PulseAudio and PipeWire's pulse server (Ubuntu 22.04+).
 
 // AlertClient is the PulseAudio client name of Movie night's own alert
 // sounds, which are never shared.
 const AlertClient = "Movie night alerts"
 
+// legacySink is the null sink older versions routed shared apps into. One
+// killed mid-share stayed loaded, looped back to the speakers, and made
+// every app routed through it stutter until the next reboot.
+const legacySink = "movienight"
+
 type Manager struct {
-	mu        sync.Mutex
-	policy    Policy
-	apps      []AppStatus
-	sinkIdx   string
-	modules   []string
-	loopModID string
-	kick      chan struct{}
+	mixer *Mixer
+
+	mu       sync.Mutex
+	policy   Policy
+	active   bool
+	apps     []AppStatus
+	captures map[string]context.CancelFunc // by sink input index
+	failed   map[string]time.Time
+	kick     chan struct{}
 }
 
 func NewManager(p Policy) (*Manager, error) {
-	if _, err := exec.LookPath("pactl"); err != nil {
-		return nil, fmt.Errorf("pactl not found (install pulseaudio-utils)")
-	}
-	m := &Manager{policy: p, kick: make(chan struct{}, 1)}
-	m.unloadStale()
-	sink, err := pactl("load-module", "module-null-sink", "sink_name="+sinkName,
-		"sink_properties=device.description=Movie-night")
-	if err != nil {
-		return nil, fmt.Errorf("create sink: %w", err)
-	}
-	m.modules = append(m.modules, sink)
-	// 20 ms underran constantly on a USB sink whose own latency was ~30 ms,
-	// making the sharer's sound choppy; 60 ms plays clean and stays in lip sync.
-	loop, err := pactl("load-module", "module-loopback", "source="+sinkName+".monitor",
-		"latency_msec=60", "source_dont_move=true")
-	if err != nil {
-		m.Close()
-		return nil, fmt.Errorf("create loopback: %w", err)
-	}
-	m.modules = append(m.modules, loop)
-	m.loopModID = loop
-	out, _ := pactl("list", "short", "sinks")
-	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) > 1 && f[1] == sinkName {
-			m.sinkIdx = f[0]
+	for _, tool := range []string{"pactl", "parec"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return nil, fmt.Errorf("%s not found (install pulseaudio-utils)", tool)
 		}
 	}
-	return m, nil
+	unloadLegacy()
+	return &Manager{
+		mixer: NewMixer(), policy: p,
+		captures: map[string]context.CancelFunc{}, failed: map[string]time.Time{},
+		kick: make(chan struct{}, 1),
+	}, nil
 }
 
-// unloadStale removes modules left behind by a previous crash.
-func (m *Manager) unloadStale() {
+// unloadLegacy removes the null sink and loopback an older Movie night
+// left behind, putting the apps on it back on the normal output.
+func unloadLegacy() {
 	out, _ := pactl("list", "short", "modules")
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "sink_name="+sinkName) || strings.Contains(line, "source="+sinkName+".monitor") {
+		if strings.Contains(line, "sink_name="+legacySink) || strings.Contains(line, "source="+legacySink+".monitor") {
 			if f := strings.Fields(line); len(f) > 0 {
+				log.Printf("audio: removing leftover module %s", line)
 				pactl("unload-module", f[0])
 			}
 		}
@@ -84,15 +78,23 @@ func (m *Manager) SetPolicy(p Policy) {
 	m.mu.Lock()
 	m.policy = p
 	m.mu.Unlock()
+	m.poke()
+}
+
+// SetActive starts or stops the per-app captures (only needed while sharing).
+func (m *Manager) SetActive(on bool) {
+	m.mu.Lock()
+	m.active = on
+	m.mu.Unlock()
+	m.poke()
+}
+
+func (m *Manager) poke() {
 	select {
 	case m.kick <- struct{}{}:
 	default:
 	}
 }
-
-// SetActive is a no-op: routing is kept even while paused so audio doesn't
-// jump between outputs.
-func (m *Manager) SetActive(bool) {}
 
 func (m *Manager) Apps() []AppStatus {
 	m.mu.Lock()
@@ -100,17 +102,28 @@ func (m *Manager) Apps() []AppStatus {
 	return append([]AppStatus(nil), m.apps...)
 }
 
+// FFmpegInput describes the raw PCM the mixer writes to ffmpeg's stdin.
 func (m *Manager) FFmpegInput() ([]string, func(ctx context.Context, w io.Writer) error) {
-	return []string{"-f", "pulse", "-fragment_size", "3840", "-i", sinkName + ".monitor"}, nil
+	return []string{"-f", "s16le", "-ar", strconv.Itoa(MixRate), "-ac", strconv.Itoa(MixChannels), "-i", "pipe:0"},
+		m.mixer.Pump
 }
 
+// Run reconciles the captures every two seconds, and right away when an
+// app opens or closes a stream.
 func (m *Manager) Run(ctx context.Context) {
+	go m.watch(ctx)
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
-		m.reconcile()
+		m.reconcile(ctx)
 		select {
 		case <-ctx.Done():
+			m.mu.Lock()
+			for id, cancel := range m.captures {
+				cancel()
+				delete(m.captures, id)
+			}
+			m.mu.Unlock()
 			return
 		case <-t.C:
 		case <-m.kick:
@@ -118,11 +131,39 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-type sinkInput struct {
-	id, sink, module, driver, binary, name string
+// watch pokes the manager whenever a sink input comes or goes, so a video
+// that starts playing is shared from its first second.
+func (m *Manager) watch(ctx context.Context) {
+	for ctx.Err() == nil {
+		cmd := platform.Command(ctx, "pactl", "subscribe")
+		out, err := cmd.StdoutPipe()
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err != nil {
+			log.Printf("audio: pactl subscribe: %v", err)
+			return
+		}
+		sc := bufio.NewScanner(out)
+		for sc.Scan() {
+			line := sc.Text()
+			if strings.Contains(line, "on sink-input") && !strings.Contains(line, "'change'") {
+				m.poke()
+			}
+		}
+		cmd.Wait()
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
-func (m *Manager) reconcile() {
+type sinkInput struct {
+	id, driver, binary, name string
+}
+
+func (m *Manager) reconcile(ctx context.Context) {
 	inputs, err := listSinkInputs()
 	if err != nil {
 		log.Printf("audio: %v", err)
@@ -130,10 +171,13 @@ func (m *Manager) reconcile() {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	running := map[string]string{}
+	want := map[string]string{} // sink input -> app
 	for _, in := range inputs {
-		// Our own alert sounds stay on your speakers only.
-		if in.module == m.loopModID || strings.Contains(in.driver, "module-loopback") || in.name == AlertClient {
+		// Our own alert sounds stay on your speakers only, and loopbacks
+		// replay audio some other stream already carries.
+		if strings.Contains(in.driver, "module-loopback") || in.name == AlertClient {
 			continue
 		}
 		key := in.binary
@@ -149,14 +193,82 @@ func (m *Manager) reconcile() {
 			display = key
 		}
 		running[key] = display
-		onOurs := in.sink == m.sinkIdx
-		if allow := m.policy.Allows(key); allow && !onOurs {
-			pactl("move-sink-input", in.id, sinkName)
-		} else if !allow && onOurs {
-			pactl("move-sink-input", in.id, "@DEFAULT_SINK@")
+		if m.active && m.policy.Allows(key) {
+			want[in.id] = display
 		}
 	}
 	m.apps = buildStatus(m.policy, running)
+
+	for id, cancel := range m.captures {
+		if _, ok := want[id]; !ok {
+			cancel()
+			delete(m.captures, id)
+		}
+	}
+	for id, display := range want {
+		if _, ok := m.captures[id]; ok {
+			continue
+		}
+		if t, ok := m.failed[id]; ok && time.Since(t) < 30*time.Second {
+			continue
+		}
+		cctx, cancel := context.WithCancel(ctx)
+		m.captures[id] = cancel
+		src := m.mixer.Add(id)
+		log.Printf("audio: sharing %s (stream %s)", display, id)
+		go func() {
+			err := captureStream(cctx, id, src)
+			m.mixer.Remove(id)
+			if err != nil && cctx.Err() == nil {
+				log.Printf("audio: capture of %s (stream %s) stopped: %v", display, id, err)
+				m.mu.Lock()
+				m.failed[id] = time.Now()
+				if c, ok := m.captures[id]; ok {
+					c()
+					delete(m.captures, id)
+				}
+				m.mu.Unlock()
+			}
+		}()
+	}
+}
+
+// captureStream records one sink input, as the mixer's format, until ctx
+// ends or the stream goes away.
+func captureStream(ctx context.Context, id string, src *Source) error {
+	cmd := platform.Command(ctx, "parec", "--monitor-stream="+id, "--raw", "--format=s16le",
+		"--rate="+strconv.Itoa(MixRate), "--channels="+strconv.Itoa(MixChannels),
+		"--latency-msec=20", "--client-name=Movie night capture")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	buf := make([]byte, bytesFor(20*time.Millisecond))
+	carry := 0 // bytes of a partial frame kept for the next read
+	for {
+		n, err := out.Read(buf[carry:])
+		n += carry
+		whole := n - n%frameBytes
+		if whole > 0 {
+			src.Push(append([]byte(nil), buf[:whole]...))
+		}
+		carry = copy(buf, buf[whole:n])
+		if err != nil {
+			break
+		}
+	}
+	err = cmd.Wait()
+	// "Entity killed": the app closed its stream, which is how a capture
+	// normally ends.
+	if msg := strings.TrimSpace(stderr.String()); err != nil && !strings.Contains(msg, "Entity killed") {
+		return fmt.Errorf("%v %s", err, msg)
+	}
+	return nil
 }
 
 func listSinkInputs() ([]sinkInput, error) {
@@ -174,10 +286,6 @@ func listSinkInputs() ([]sinkInput, error) {
 			list = append(list, sinkInput{id: strings.TrimPrefix(line, "Sink Input #")})
 			cur = &list[len(list)-1]
 		case cur == nil:
-		case strings.HasPrefix(line, "Sink: "):
-			cur.sink = strings.TrimPrefix(line, "Sink: ")
-		case strings.HasPrefix(line, "Owner Module: "):
-			cur.module = strings.TrimPrefix(line, "Owner Module: ")
 		case strings.HasPrefix(line, "Driver: "):
 			cur.driver = strings.TrimPrefix(line, "Driver: ")
 		case strings.HasPrefix(line, "application.process.binary = "):
@@ -196,20 +304,8 @@ func unquote(s string) string {
 	return strings.Trim(s, `"`)
 }
 
-// Close moves every app back to the normal output and removes our modules.
-func (m *Manager) Close() {
-	if inputs, err := listSinkInputs(); err == nil {
-		for _, in := range inputs {
-			if in.sink == m.sinkIdx && in.module != m.loopModID {
-				pactl("move-sink-input", in.id, "@DEFAULT_SINK@")
-			}
-		}
-	}
-	for i := len(m.modules) - 1; i >= 0; i-- {
-		pactl("unload-module", m.modules[i])
-	}
-	m.modules = nil
-}
+// Close has nothing to undo: Run's captures end with its context.
+func (m *Manager) Close() {}
 
 func pactl(args ...string) (string, error) {
 	out, err := exec.Command("pactl", args...).CombinedOutput()

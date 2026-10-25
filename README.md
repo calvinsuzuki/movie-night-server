@@ -128,7 +128,7 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
 - **🔗 The link:** a Cloudflare *quick tunnel* gives the local web server a public HTTPS address. It needs no account and no open router ports. Every path sits under a random 128-bit token that changes each session, and anything else gets a "link isn't active" page.
 - **🎟️ Join passes:** the viewer page waits for your answer. An allowed pass opens exactly one connection and is revoked when that connection ends. Each IP can make at most 3 requests a minute, and at most 5 people can wait at once.
 - **📡 The picture:** your screen is captured with the Desktop Duplication API (Windows) or X11 (Ubuntu). It's encoded once to H.264 (NVENC → QuickSync → AMF → x264, picked automatically), and each packet is copied to every viewer without re-encoding.
-- **🔊 The sound:** on Windows, each allowed app is recorded with WASAPI *process loopback* and the streams are mixed. On Ubuntu, allowed apps are routed into a `movienight` PulseAudio sink that is looped back to your speakers.
+- **🔊 The sound:** on Windows, each allowed app is recorded with WASAPI *process loopback* and the streams are mixed. On Ubuntu, each allowed app's PulseAudio stream is recorded on its own with `parec --monitor-stream`, so your speakers are left untouched.
 - **🧭 Finding a path:** each side learns its public address from public STUN servers, and the browser connects directly over IPv4 or IPv6. *Open log* records which path each friend used.
 - **🧹 Clean exits:** ffmpeg and cloudflared always close with Movie night, even after a crash. Alert sounds play only on your speakers and are never shared.
 - **📶 Upload:** you send one copy of the stream per friend, about 5 Mbps each at 1080p.
