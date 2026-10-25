@@ -403,7 +403,12 @@ func (m *menu) drawRow(c *canvas, rw row, r rectF) {
 			c.fillRect(rectF{x, r.T, x + 11*s, r.B}, redDeep)
 		}
 		c.text("🍿", rectF{r.L + 12*s, r.T, r.L + 48*s, r.B}, font{Size: 28 * s, Weight: 400}, salt)
-		c.text(it.Label, rectF{r.L + 56*s, r.T + 10*s, r.R - 12*s, r.T + 34*s}, font{Size: 16 * s, Weight: 700}, salt)
+		title := font{Size: 16 * s, Weight: 700}
+		c.text(it.Label, rectF{r.L + 56*s, r.T + 10*s, r.R - 12*s, r.T + 34*s}, title, salt)
+		if it.Badge != "" { // the version, small, on the title's baseline
+			tw, _ := gfxDev.measure(it.Label, title, r.w())
+			c.text(it.Badge, rectF{r.L + 56*s + tw + 6*s, r.T + 14*s, r.R - 12*s, r.T + 34*s}, font{Size: 11 * s, Weight: 600}, salt.with(0.7))
+		}
 		dot := r.L + 56*s + 4*s
 		c.fillCircle(dot, r.T+46*s, 5*s, salt.with(0.9))
 		c.fillCircle(dot, r.T+46*s, 3.6*s, toneColor(it.Tone))

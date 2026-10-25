@@ -57,6 +57,7 @@ type Item struct {
 	Kind          Kind
 	ID            string
 	Label, Detail string
+	Badge         string // Header: small text beside Label (the version)
 	Tone          Tone
 	Icon          Icon // for buttons beside Primary; Label is the button's tooltip
 	Checked       bool

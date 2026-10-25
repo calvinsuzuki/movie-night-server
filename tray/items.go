@@ -34,7 +34,8 @@ func (m *menu) items() []ui.Item {
 	case st.Sharing:
 		tone = ui.ToneLive
 	}
-	header := ui.Item{Kind: ui.Header, ID: "status", Label: platform.AppName, Detail: headerLine(st, copied), Tone: tone}
+	header := ui.Item{Kind: ui.Header, ID: "status", Label: platform.AppName, Badge: m.version,
+		Detail: headerLine(st, copied), Tone: tone}
 	if st.Sharing && st.URL != "" {
 		header.OnClick, header.KeepOpen = func() { m.copy() }, true // the link copies on a click
 	}

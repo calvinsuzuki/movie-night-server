@@ -11,6 +11,7 @@ import (
 	"net"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,7 +53,8 @@ const addrSlots = 6
 type menu struct {
 	a       *app.App
 	logPath string
-	custom  bool // our own menu (ui) instead of the system's
+	version string // shown small beside the menu's title
+	custom  bool   // our own menu (ui) instead of the system's
 
 	status, copyLink, openPage, share, pause *systray.MenuItem
 	waitingHeader                            *systray.MenuItem
@@ -87,11 +89,25 @@ type menu struct {
 }
 
 // Run blocks until the user quits from the menu.
-func Run(a *app.App, logPath string) {
-	m := &menu{a: a, logPath: logPath, popups: map[string]func(){}}
+func Run(a *app.App, logPath, version string) {
+	m := &menu{a: a, logPath: logPath, version: shortVersion(version), popups: map[string]func(){}}
 	a.OnRequest = m.knock
 	a.OnThrow = m.thrown
 	systray.Run(m.build, func() {})
+}
+
+// shortVersion fits the build's version beside the menu's title:
+// "0.4.0+nightly.202610251736" becomes "v0.4.0 nightly".
+func shortVersion(v string) string {
+	if v == "" || v == "dev" {
+		return "dev"
+	}
+	v, build, _ := strings.Cut(v, "+")
+	v = "v" + v
+	if kind, _, _ := strings.Cut(build, "."); kind != "" {
+		v += " " + kind
+	}
+	return v
 }
 
 // Quit closes the tray, making Run return.

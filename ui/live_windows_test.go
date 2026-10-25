@@ -37,7 +37,7 @@ func TestLive(t *testing.T) {
 	var clicked, kept, alt, kicked atomic.Int32
 	items := func() []Item {
 		return []Item{
-			{Kind: Header, ID: "status", Label: "Movie night", Detail: "Sharing · 1 watching", Tone: ToneLive},
+			{Kind: Header, ID: "status", Label: "Movie night", Badge: "v0.4.0 nightly", Detail: "Sharing · 1 watching", Tone: ToneLive},
 			{Kind: Primary, ID: "share", Label: "Stop sharing", Tone: ToneBad, OnClick: func() { clicked.Add(1) }},
 			{Kind: Toggle, ID: "toggle", Label: "A switch", OnClick: func() { kept.Add(1) }, KeepOpen: true},
 			{Kind: Request, ID: "req", Label: "Ana", Detail: "wants to watch", OnClick: func() { kept.Add(1) }, OnAlt: func() { alt.Add(1) }},

@@ -29,7 +29,7 @@ func TestPreview(t *testing.T) {
 	gfxDev = g
 	nop := func() {}
 	items := []Item{
-		{Kind: Header, ID: "status", Label: "Movie night", Detail: "Sharing · tender-otter-movie-night.trycloudflare.com/s/k3Jx9", Tone: ToneLive, OnClick: nop},
+		{Kind: Header, ID: "status", Label: "Movie night", Badge: "v0.4.0 nightly", Detail: "Sharing · tender-otter-movie-night.trycloudflare.com/s/k3Jx9", Tone: ToneLive, OnClick: nop},
 		{Kind: Primary, ID: "share", Label: "Stop sharing", Tone: ToneBad, OnClick: nop, Children: []Item{
 			{ID: "pause", Icon: IconPause, Label: "Resume picture", Checked: true, Tone: ToneWarn, OnClick: nop},
 			{ID: "copy", Icon: IconLink, Label: "Copied!", Checked: true, OnClick: nop},

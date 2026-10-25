@@ -20,7 +20,7 @@ func TestLive(t *testing.T) {
 	}
 	items := func() []Item {
 		return []Item{
-			{Kind: Header, ID: "status", Label: "Movie night", Detail: "Sharing · fancy-words.trycloudflare.com", Tone: ToneLive, OnClick: func() {}},
+			{Kind: Header, ID: "status", Label: "Movie night", Badge: "v0.4.0 nightly", Detail: "Sharing · fancy-words.trycloudflare.com", Tone: ToneLive, OnClick: func() {}},
 			{Kind: Primary, ID: "share", Label: "Stop sharing", Tone: ToneBad, OnClick: func() {}, Children: []Item{
 				{Kind: Action, ID: "pause", Icon: IconPause, Label: "Pause picture", OnClick: func() {}},
 				{Kind: Action, ID: "copy", Icon: IconLink, Label: "Copy invite link", OnClick: func() {}},

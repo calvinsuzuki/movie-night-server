@@ -93,7 +93,7 @@ func main() {
 			<-sig.Done()
 			tray.Quit()
 		}()
-		tray.Run(a, logPath)
+		tray.Run(a, logPath, version)
 	}
 	log.Print("shutting down")
 	cancel()
