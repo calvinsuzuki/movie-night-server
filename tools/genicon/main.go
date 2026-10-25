@@ -199,16 +199,6 @@ func downscale(c *canvas, size int) *image.NRGBA {
 	return img
 }
 
-func grayscale(src *image.NRGBA) *image.NRGBA {
-	dst := image.NewNRGBA(src.Rect)
-	for i := 0; i < len(src.Pix); i += 4 {
-		l := 0.3*float64(src.Pix[i]) + 0.59*float64(src.Pix[i+1]) + 0.11*float64(src.Pix[i+2])
-		v := uint8(l*0.8 + 30)
-		dst.Pix[i], dst.Pix[i+1], dst.Pix[i+2], dst.Pix[i+3] = v, v, v, src.Pix[i+3]
-	}
-	return dst
-}
-
 func pngBytes(img image.Image) []byte {
 	var b bytes.Buffer
 	if err := png.Encode(&b, img); err != nil {
@@ -272,42 +262,137 @@ func must(err error) {
 	}
 }
 
+// fill paints every pixel whose center is inside the polygon.
+func (c *canvas) fill(pts [][2]float64, col rgba) {
+	minX, minY, maxX, maxY := pts[0][0], pts[0][1], pts[0][0], pts[0][1]
+	for _, p := range pts {
+		minX, minY = math.Min(minX, p[0]), math.Min(minY, p[1])
+		maxX, maxY = math.Max(maxX, p[0]), math.Max(maxY, p[1])
+	}
+	for y := int(minY); y <= int(maxY); y++ {
+		for x := int(minX); x <= int(maxX); x++ {
+			px, py, in := float64(x)+0.5, float64(y)+0.5, false
+			for i, j := 0, len(pts)-1; i < len(pts); j, i = i, i+1 {
+				a, b := pts[i], pts[j]
+				if (a[1] > py) != (b[1] > py) && px < (b[0]-a[0])*(py-a[1])/(b[1]-a[1])+a[0] {
+					in = !in
+				}
+			}
+			if in {
+				c.blend(x, y, col)
+			}
+		}
+	}
+}
+
+func (c *canvas) rect(x0, y0, x1, y1 float64, col rgba) {
+	c.fill([][2]float64{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}}, col)
+}
+
+// line paints a thick straight stroke.
+func (c *canvas) line(x0, y0, x1, y1, w float64, col rgba) {
+	dx, dy := x1-x0, y1-y0
+	l := math.Hypot(dx, dy)
+	nx, ny := -dy/l*w/2, dx/l*w/2
+	c.fill([][2]float64{{x0 + nx, y0 + ny}, {x1 + nx, y1 + ny}, {x1 - nx, y1 - ny}, {x0 - nx, y0 - ny}}, col)
+}
+
+// The status badge sits in the bottom-right corner, over the bucket.
+const bx, by, bR = 760.0, 760.0, 264.0
+
+func badge(base *canvas, bg rgba, symbol func(c *canvas)) *canvas {
+	c := newCanvas(S, S)
+	copy(c.px, base.px)
+	c.circle(bx, by, bR, rgba{1, 1, 1, 1})
+	c.circle(bx, by, bR-44, bg)
+	if symbol != nil {
+		symbol(c)
+	}
+	return c
+}
+
+var (
+	ink   = rgba{0.12, 0.10, 0.10, 1}
+	green = rgba{0.24, 0.81, 0.48, 1}
+	blue  = rgba{0.13, 0.47, 0.95, 1}
+)
+
+func pauseBars(c *canvas) {
+	c.rect(bx-90, by-110, bx-28, by+110, ink)
+	c.rect(bx+28, by-110, bx+90, by+110, ink)
+}
+
+func loadingDots(c *canvas) {
+	for _, dx := range []float64{-100, 0, 100} {
+		c.circle(bx+dx, by, 40, ink)
+	}
+}
+
+// mutedSpeaker: a speaker with a slash through it.
+func mutedSpeaker(c *canvas) {
+	white := rgba{1, 1, 1, 1}
+	c.rect(bx-120, by-48, bx-60, by+48, white)
+	c.fill([][2]float64{{bx - 60, by - 48}, {bx + 10, by - 118}, {bx + 10, by + 118}, {bx - 60, by + 48}}, white)
+	c.line(bx+40, by-70, bx+130, by+70, 34, white)
+	c.line(bx+40, by+70, bx+130, by-70, 34, white)
+}
+
+func gray(src *canvas) *canvas {
+	c := newCanvas(S, S)
+	for i, p := range src.px {
+		l := (0.3*p.r+0.59*p.g+0.11*p.b)*0.8 + 30.0/255
+		c.px[i] = rgba{l, l, l, p.a}
+	}
+	return c
+}
+
 func main() {
 	c := newCanvas(S, S)
 	drawPopcorn(c)
 	drawBucket(c)
+	g := gray(c)
 
-	// "Someone wants to watch": a blue dot in the top-right corner.
-	badged := newCanvas(S, S)
-	copy(badged.px, c.px)
-	badged.circle(800, 224, 224, rgba{1, 1, 1, 1})
-	badged.circle(800, 224, 176, rgba{0.13, 0.47, 0.95, 1})
+	// Tray states. The popcorn is grey until there's a link to share.
+	variants := []struct {
+		name string
+		img  *canvas
+	}{
+		{"idle", g}, // not sharing
+		{"loading", badge(g, butter, loadingDots)},                   // creating the link
+		{"live", badge(c, green, nil)},                               // sharing
+		{"paused", badge(g, butter, pauseBars)},                      // picture frozen
+		{"muted", badge(c, rgba{0.80, 0.16, 0.16, 1}, mutedSpeaker)}, // sharing without sound
+		{"request", func() *canvas { // someone wants to watch: a blue dot, top right
+			r := newCanvas(S, S)
+			copy(r.px, c.px)
+			r.circle(800, 224, 224, rgba{1, 1, 1, 1})
+			r.circle(800, 224, 176, blue)
+			return r
+		}()},
+	}
 
 	out := "assets"
 	must(os.MkdirAll(out, 0o755))
 	sizes := []int{16, 20, 24, 32, 40, 48, 64, 128, 256}
-	var color, gray, badge []*image.NRGBA
+	var color []*image.NRGBA
 	for _, s := range sizes {
-		img := downscale(c, s)
-		color = append(color, img)
-		gray = append(gray, grayscale(img))
-		badge = append(badge, downscale(badged, s))
+		color = append(color, downscale(c, s))
 	}
 	for i, s := range sizes {
 		if s == 48 || s == 128 || s == 256 {
 			must(os.WriteFile(filepath.Join(out, "icon-"+itoa(s)+".png"), pngBytes(color[i]), 0o644))
 		}
-		if s == 64 {
-			must(os.WriteFile(filepath.Join(out, "tray.png"), pngBytes(color[i]), 0o644))
-			must(os.WriteFile(filepath.Join(out, "tray-paused.png"), pngBytes(gray[i]), 0o644))
-			must(os.WriteFile(filepath.Join(out, "tray-request.png"), pngBytes(badge[i]), 0o644))
-		}
 	}
 	writeICO(filepath.Join(out, "icon.ico"), color)
-	// Tray icons only need the small sizes.
-	writeICO(filepath.Join(out, "tray.ico"), color[:6])
-	writeICO(filepath.Join(out, "tray-paused.ico"), gray[:6])
-	writeICO(filepath.Join(out, "tray-request.ico"), badge[:6])
+	// Tray icons only need the small sizes (ICO for Windows, 64px PNG elsewhere).
+	for _, v := range variants {
+		var imgs []*image.NRGBA
+		for _, s := range sizes[:6] {
+			imgs = append(imgs, downscale(v.img, s))
+		}
+		writeICO(filepath.Join(out, "tray-"+v.name+".ico"), imgs)
+		must(os.WriteFile(filepath.Join(out, "tray-"+v.name+".png"), pngBytes(downscale(v.img, 64)), 0o644))
+	}
 	log.Printf("wrote icons to %s/", out)
 }
 

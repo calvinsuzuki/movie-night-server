@@ -27,6 +27,13 @@ type Config struct {
 	Cursor    bool
 	VideoPort int
 	AudioPort int
+
+	// Camera, if set, is shared instead of the monitor.
+	Camera *Camera
+	// Bubble, if set, is a camera shown small in a corner of the monitor
+	// (BubbleCorner, one of BottomRight...).
+	Bubble       *Camera
+	BubbleCorner string
 }
 
 // Encoders in preference order; "auto" picks the first that can actually open.
@@ -77,6 +84,17 @@ func VideoArgs(c Config, encoder string) []string {
 }
 
 func captureArgs(c Config) []string {
+	if c.Camera != nil {
+		// The camera alone, never larger than it really is.
+		vf := fmt.Sprintf("fps=%d,", c.FPS)
+		if c.Height > 0 {
+			vf += fmt.Sprintf(`scale=-2:min(ih\,%d):flags=bicubic,`, c.Height)
+		}
+		return append(cameraInput(*c.Camera), "-vf", vf+"format=nv12")
+	}
+	if c.Bubble != nil && runtime.GOOS != "darwin" {
+		return bubbleArgs(c)
+	}
 	var args []string
 	scale := ""
 	if c.Height > 0 && c.Height != c.Monitor.Height {
@@ -84,33 +102,83 @@ func captureArgs(c Config) []string {
 	}
 	switch runtime.GOOS {
 	case "windows":
-		// Desktop Duplication on the GPU that owns the monitor. Frames are copied to
-		// system memory once (~200 MB/s at 1080p) so any encoder on any GPU can be used.
-		grab := fmt.Sprintf("ddagrab=output_idx=%d:framerate=%d:draw_mouse=%d",
-			c.Monitor.Output, c.FPS, boolInt(c.Cursor))
-		args = append(args,
-			"-init_hw_device", fmt.Sprintf("d3d11va=cap:%d", c.Monitor.Adapter),
-			"-filter_hw_device", "cap",
-			"-filter_complex", grab+",hwdownload,format=bgra,"+scale+"format=nv12[v]",
-			"-map", "[v]")
+		args = append(args, ddagrabArgs(c)...)
+		args = append(args, "-filter_complex", ddagrab(c)+scale+"format=nv12[v]", "-map", "[v]")
 	case "darwin":
 		args = append(args, "-f", "avfoundation", "-framerate", strconv.Itoa(c.FPS),
 			"-capture_cursor", strconv.Itoa(boolInt(c.Cursor)),
 			"-i", c.Monitor.Device+":none", "-vf", scale+"format=nv12")
 	default:
-		args = append(args, "-f", "x11grab", "-framerate", strconv.Itoa(c.FPS),
-			"-draw_mouse", strconv.Itoa(boolInt(c.Cursor)),
-			"-video_size", fmt.Sprintf("%dx%d", c.Monitor.Width, c.Monitor.Height),
-			"-i", c.Monitor.Device, "-vf", scale+"format=nv12")
+		args = append(args, x11grabInput(c)...)
+		args = append(args, "-vf", scale+"format=nv12")
 	}
 	return args
+}
+
+// ddagrabArgs open the GPU that owns the monitor, for ddagrab.
+func ddagrabArgs(c Config) []string {
+	return []string{"-init_hw_device", fmt.Sprintf("d3d11va=cap:%d", c.Monitor.Adapter), "-filter_hw_device", "cap"}
+}
+
+// ddagrab is Desktop Duplication on the GPU that owns the monitor. Frames
+// are copied to system memory once (~200 MB/s at 1080p) so any encoder on
+// any GPU can be used.
+func ddagrab(c Config) string {
+	return fmt.Sprintf("ddagrab=output_idx=%d:framerate=%d:draw_mouse=%d,hwdownload,format=bgra,",
+		c.Monitor.Output, c.FPS, boolInt(c.Cursor))
+}
+
+func x11grabInput(c Config) []string {
+	return []string{"-f", "x11grab", "-framerate", strconv.Itoa(c.FPS),
+		"-draw_mouse", strconv.Itoa(boolInt(c.Cursor)),
+		"-video_size", fmt.Sprintf("%dx%d", c.Monitor.Width, c.Monitor.Height),
+		"-i", c.Monitor.Device}
+}
+
+// bubbleArgs put the camera, a quarter of the picture's height with a
+// thin red frame, in a corner of the monitor.
+func bubbleArgs(c Config) []string {
+	h := c.Height
+	if h <= 0 {
+		h = c.Monitor.Height
+	}
+	scale := ""
+	if h != c.Monitor.Height {
+		scale = fmt.Sprintf("scale=-2:%d:flags=bicubic,", h)
+	}
+	size, border, margin := h/4&^1, max(2, h/540)&^1, max(2, h/108)&^1
+	x, y := fmt.Sprintf("main_w-overlay_w-%d", margin), fmt.Sprintf("main_h-overlay_h-%d", margin)
+	switch c.BubbleCorner {
+	case BottomLeft:
+		x = strconv.Itoa(margin)
+	case TopRight:
+		y = strconv.Itoa(margin)
+	case TopLeft:
+		x, y = strconv.Itoa(margin), strconv.Itoa(margin)
+	}
+	// Both are live sources with their own clocks: start both at zero.
+	cam := fmt.Sprintf("fps=%d,scale=-2:%d,pad=iw+%d:ih+%d:%d:%d:color=0xAB1313,format=yuv420p,setpts=PTS-STARTPTS[b]",
+		c.FPS, size-2*border, 2*border, 2*border, border, border)
+	mix := fmt.Sprintf("[s][b]overlay=x=%s:y=%s:eof_action=pass:repeatlast=1,fps=%d,format=nv12[v]", x, y, c.FPS)
+
+	var args []string
+	if runtime.GOOS == "windows" {
+		args = append(args, cameraInput(*c.Bubble)...)
+		args = append(args, ddagrabArgs(c)...)
+		screen := ddagrab(c) + scale + "format=yuv420p,setpts=PTS-STARTPTS[s]"
+		return append(args, "-filter_complex", screen+";[0:v]"+cam+";"+mix, "-map", "[v]")
+	}
+	args = append(args, x11grabInput(c)...)
+	args = append(args, cameraInput(*c.Bubble)...)
+	screen := "[0:v]" + scale + "format=yuv420p,setpts=PTS-STARTPTS[s]"
+	return append(args, "-filter_complex", screen+";[1:v]"+cam+";"+mix, "-map", "[v]")
 }
 
 func encoderArgs(c Config, encoder string) []string {
 	gop := strconv.Itoa(c.FPS * 2) // new viewers / lost packets recover within 2s
 	rate := strconv.Itoa(c.Bitrate)
 	args := []string{"-c:v", encoder,
-		"-b:v", rate, "-maxrate", rate, "-bufsize", strconv.Itoa(c.Bitrate/2),
+		"-b:v", rate, "-maxrate", rate, "-bufsize", strconv.Itoa(c.Bitrate / 2),
 		"-g", gop, "-bf", "0"}
 	switch encoder {
 	case "h264_nvenc":

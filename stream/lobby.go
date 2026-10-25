@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"crypto/subtle"
 	"errors"
 	"strings"
 	"sync"
@@ -56,6 +57,7 @@ type Lobby struct {
 	mu      sync.Mutex
 	token   string // the secret part of the link; "" while not sharing
 	approve bool
+	hostKey string // lets the sharer's own page in without asking (see JoinHost)
 	tickets map[string]*ticket
 	byIP    map[string][]time.Time
 	// seen remembers who was let in, by IP and name, and when they were last
@@ -71,7 +73,7 @@ type Lobby struct {
 }
 
 func NewLobby() *Lobby {
-	l := &Lobby{tickets: map[string]*ticket{}, byIP: map[string][]time.Time{}, seen: map[string]time.Time{}, approve: true}
+	l := &Lobby{tickets: map[string]*ticket{}, byIP: map[string][]time.Time{}, seen: map[string]time.Time{}, approve: true, hostKey: newToken()}
 	go l.janitor()
 	return l
 }
@@ -162,6 +164,26 @@ func (l *Lobby) Join(name, ip string) (string, error) {
 	}
 	l.changed()
 	return t.Ticket, nil
+}
+
+// HostKey is the secret that JoinHost checks. The tray puts it in the
+// address of the page it opens for the sharer (after the #, so it never
+// travels in a link or a log). It lasts until Movie night quits.
+func (l *Lobby) HostKey() string { return l.hostKey }
+
+// JoinHost lets the sharer into their own stream without asking, if key is
+// HostKey; ok is false otherwise.
+func (l *Lobby) JoinHost(name, ip, key string) (id string, ok bool) {
+	if key == "" || subtle.ConstantTimeCompare([]byte(key), []byte(l.hostKey)) != 1 {
+		return "", false
+	}
+	t := &ticket{Request: Request{Ticket: newToken(), Name: cleanName(name), IP: ip, At: time.Now()}, state: Pending, wake: make(chan struct{})}
+	l.mu.Lock()
+	l.tickets[t.Ticket] = t
+	l.set(t, Allowed)
+	l.mu.Unlock()
+	l.changed()
+	return t.Ticket, true
 }
 
 // returning reports whether t's IP and name were let in and watching within
@@ -263,6 +285,17 @@ func (l *Lobby) Viewer(id string) (string, bool) {
 		return "", false
 	}
 	return t.viewer, true
+}
+
+// Name returns who holds a ticket, whatever state it's in.
+func (l *Lobby) Name(id string) (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t, ok := l.tickets[id]
+	if !ok {
+		return "", false
+	}
+	return t.Name, true
 }
 
 // Kicked marks the viewer's ticket so their page doesn't silently ask again.

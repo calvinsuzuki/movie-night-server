@@ -162,3 +162,20 @@ func TestCleanName(t *testing.T) {
 		}
 	}
 }
+
+func TestJoinHost(t *testing.T) {
+	l := NewLobby()
+	l.Open()
+	if _, ok := l.JoinHost("Calvin", "1.1.1.1", "wrong"); ok {
+		t.Fatal("a wrong key let someone in as the host")
+	}
+	if _, ok := l.JoinHost("Calvin", "1.1.1.1", ""); ok {
+		t.Fatal("no key let someone in as the host")
+	}
+	asked := false
+	l.OnRequest = func(Request) { asked = true }
+	tk, ok := l.JoinHost("Calvin", "1.1.1.1", l.HostKey())
+	if !ok || l.State(tk) != Allowed || asked {
+		t.Fatalf("host: ok %v, state %q, asked %v; want in without asking", ok, l.State(tk), asked)
+	}
+}

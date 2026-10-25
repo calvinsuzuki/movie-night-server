@@ -18,6 +18,7 @@ let muted = store.get('muted', false);
 let pc = null, resource = null, ticket = null, statsTimer = null, joined = false;
 let watched = false; // saw the stream at least once (gets the goodbye when it ends)
 let askToken = 0; // bumps on every new attempt so stale loops stop
+let gather = { ms: 0, done: false }; // how finding our addresses went, for reports
 
 // iOS Safari ignores media-element volume, so route audio through Web Audio there.
 const elementVolumeWorks = (() => { const a = document.createElement('audio'); a.volume = 0.5; return a.volume === 0.5; })();
@@ -80,7 +81,7 @@ async function ask(text = 'Waiting for the host to let you in…') {
   try {
     res = await fetch(base + 'join', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: nameInput.value.trim() }),
+      body: JSON.stringify({ name: nameInput.value.trim(), host: hostKey }),
     });
   } catch {
     return notice("Can't reach the host. Check your internet connection and try again.");
@@ -195,9 +196,11 @@ async function connect(mine) {
   };
 
   try {
+    const t0 = performance.now();
     await conn.setLocalDescription(await conn.createOffer());
     // Non-trickle: wait (briefly) for our candidates so the offer carries them.
     await gatherDone(conn, 3000);
+    gather = { ms: Math.round(performance.now() - t0), done: conn.iceGatheringState === 'complete' };
     const res = await fetch(base + 'whep', {
       method: 'POST', headers: { 'Content-Type': 'application/sdp', 'X-Ticket': ticket }, body: conn.localDescription.sdp,
     });
@@ -223,7 +226,11 @@ function gatherDone(conn, timeout) {
 
 // The connection ended: find out why before deciding what to show.
 async function lost(everConnected) {
-  const mine = askToken;
+  const mine = askToken, conn = pc;
+  if (!conn || conn.lost) return; // "failed" can follow "disconnected" while we report
+  conn.lost = true;
+  await report(conn, everConnected ? 'dropped' : 'never connected');
+  if (mine !== askToken) return;
   teardown();
   if (!everConnected) {
     return notice("Couldn't reach the host directly. Their network (or yours) blocks direct connections; ask them to set up a relay server in Movie night.");
@@ -235,6 +242,33 @@ async function lost(everConnected) {
   // A network blip: our ticket is good again for a minute, so just reconnect.
   if (state === 'allowed') return connect(mine);
   ask('Connection dropped. Asking the host to let you back in…');
+}
+
+// Sends the host what this browser saw of a failed connection (its own
+// addresses and every path it tried), for the host's log: friends on phones
+// can't easily send their browser's logs.
+async function report(conn, reason) {
+  const d = {
+    ticket, reason, browser: navigator.userAgent, gatherMs: gather.ms, gathered: gather.done,
+    state: `ice ${conn.iceConnectionState}, connection ${conn.connectionState}`,
+    network: navigator.connection ? `${navigator.connection.type || 'type unknown'}, speed like ${navigator.connection.effectiveType || '?'}` : 'unknown',
+    local: [], pairs: [],
+  };
+  const describe = (c) => !c ? '?' : `${c.candidateType} ${c.protocol} ${c.address || c.ip || 'hidden'}:${c.port}` + (c.relayProtocol ? ` via ${c.relayProtocol}` : '');
+  try {
+    const stats = await conn.getStats(), cands = new Map();
+    stats.forEach((s) => { if (s.type === 'local-candidate' || s.type === 'remote-candidate') cands.set(s.id, s); });
+    stats.forEach((s) => {
+      if (s.type === 'local-candidate') d.local.push(describe(s));
+      if (s.type === 'candidate-pair') {
+        d.pairs.push(`me ${describe(cands.get(s.localCandidateId))} → host ${describe(cands.get(s.remoteCandidateId))}: ${s.state}, `
+          + `sent ${s.requestsSent || 0} checks, ${s.responsesReceived || 0} answered, got ${s.requestsReceived || 0} from the host`);
+      }
+    });
+  } catch { /* the report still says what it can */ }
+  fetch(base + 'report', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d), keepalive: true,
+  }).catch(() => {});
 }
 
 // While watching, keep asking the host's side about our ticket, so a kick or
@@ -641,9 +675,24 @@ async function updateStats() {
   ].join('\n');
 }
 
+// The host's own tab (opened from the tray menu) ends in #host=<key>: it
+// fills in their name and gets in without asking. The key is kept for this
+// tab's reloads, and dropped from the address bar so a link copied from
+// there is plain.
+let hostKey = '';
+try { hostKey = sessionStorage.getItem('hostKey') || ''; } catch { /* no storage: no reloads as host */ }
+const hostMark = /^#host=([0-9a-f]+)$/.exec(location.hash);
+if (hostMark) {
+  hostKey = hostMark[1];
+  try { sessionStorage.setItem('hostKey', hostKey); } catch { /* fine */ }
+  history.replaceState(null, '', location.pathname + location.search);
+}
+const fromHost = !!hostKey;
+
 // The tab title alternates "Movie night" / "Calvin streams" every 2 s (0.5 Hz).
 fetch(base + 'config', { cache: 'no-store' }).then((r) => r.json()).then((cfg) => {
   if (!cfg.host) return;
+  if (fromHost && !nameInput.value.trim()) nameInput.value = cfg.host;
   const titles = ['Movie night', `${cfg.host} streams`];
   let i = 0;
   setInterval(() => { document.title = titles[i = 1 - i]; }, 2000);

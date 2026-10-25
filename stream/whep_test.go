@@ -58,6 +58,20 @@ func TestHandlerRules(t *testing.T) {
 		t.Errorf("pending ticket: %d, want 403", got)
 	}
 
+	// Browser reports: only from someone who asked to join, and only a few.
+	if got := do("POST", s+"report", `{"ticket":"nope","reason":"x"}`); got != 403 {
+		t.Errorf("report without ticket: %d, want 403", got)
+	}
+	for i := 1; i <= 6; i++ {
+		want := 204
+		if i == 6 {
+			want = 403
+		}
+		if got := do("POST", s+"report", `{"ticket":"`+tk+`","reason":"never connected\nfake line","pairs":["a","b"]}`); got != want {
+			t.Errorf("report %d: %d, want %d", i, got, want)
+		}
+	}
+
 	l.Close()
 	if got := do("GET", s, "", nil...); got != 404 {
 		t.Errorf("link after stop: %d, want 404", got)

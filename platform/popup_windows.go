@@ -3,11 +3,13 @@
 package platform
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -15,8 +17,10 @@ import (
 
 // The "Ana wants to watch" popup: a small dark card with Movie night's
 // colors, just above the taskbar on the side of the clock (where the popcorn
-// icon lives). It stays on top but never takes focus from the movie, and
-// several stack upwards.
+// icon lives). It stays on top but never takes focus from the movie, several
+// stack upwards, and it's left out of the screen capture. Choose adds a
+// third, quieter answer as a link ("Don't ask again"), and ChooseTimed a
+// countdown on the yes button.
 
 var (
 	gdi32  = windows.NewLazySystemDLL("gdi32.dll")
@@ -47,6 +51,7 @@ var (
 	procGetDpiForSystem            = user32.NewProc("GetDpiForSystem")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 	procPrivateExtractIcons        = user32.NewProc("PrivateExtractIconsW")
+	procSetWindowDisplayAffinity   = user32.NewProc("SetWindowDisplayAffinity")
 	procGetModuleHandle            = kernel32.NewProc("GetModuleHandleW")
 
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
@@ -127,25 +132,28 @@ type trackMouseEvent struct {
 }
 
 type popup struct {
-	title, text  string
-	answer       chan bool
-	dismissed    *atomic.Bool
-	result       int // 0 none, 1 allow, 2 deny
-	hot          int // button under the mouse: 0 none, 1 allow, 2 deny
-	tracking     bool
-	alpha        int
-	slot         int
-	scale        float64
-	w, h         int32
-	allow, deny  rect
-	fontSmall    uintptr
-	fontBold     uintptr
-	fontButton   uintptr
-	icon         uintptr
-	iconSize     int32
-	denyLabel    string
-	allowLabel   string
-	pad, iconGap int32
+	title, text       string
+	answer            chan int
+	dismissed         *atomic.Bool
+	result            int // 0 none, 1 allow, 2 deny, 3 link, 4 time ran out
+	hot               int // button under the mouse: 0 none, 1 allow, 2 deny, 3 link
+	tracking          bool
+	alpha             int
+	slot              int
+	scale             float64
+	w, h              int32
+	allow, deny, link rect
+	fontSmall         uintptr
+	fontBold          uintptr
+	fontButton        uintptr
+	icon              uintptr
+	iconSize          int32
+	denyLabel         string
+	allowLabel        string
+	linkLabel         string    // optional
+	deadline          time.Time // optional: the countdown on the yes button ends here
+	shown             string    // the countdown last painted, e.g. "2:59"
+	pad, iconGap      int32
 }
 
 var (
@@ -163,16 +171,43 @@ var (
 // (Let in) or false (Not now) when the user clicks; dismiss closes the popup
 // without an answer.
 func Ask(title, text string) (answer <-chan bool, dismiss func()) {
+	choice, dismiss := Choose(title, text, "Let them in", "Not now", "")
 	ch := make(chan bool, 1)
+	go func() {
+		if c, ok := <-choice; ok {
+			ch <- c == 0
+		}
+		close(ch)
+	}()
+	return ch, dismiss
+}
+
+// Choose shows a popup with a yes button, a no button and, if extra isn't
+// empty, a link, without blocking. answer gets 0 (yes), 1 (no) or 2 (the
+// link) when the user clicks; dismiss closes the popup without an answer.
+func Choose(title, text, yes, no, extra string) (answer <-chan int, dismiss func()) {
+	return ChooseTimed(title, text, yes, no, extra, 0)
+}
+
+// ChooseTimed is Choose with a countdown on the yes button, "End stream
+// (2:59)": when it runs out the popup closes and answer gets 3. Zero means
+// no countdown.
+func ChooseTimed(title, text, yes, no, extra string, after time.Duration) (answer <-chan int, dismiss func()) {
+	ch := make(chan int, 1)
 	var dismissed atomic.Bool
 	hwndCh := make(chan uintptr, 1)
 	go func() {
 		runtime.LockOSThread() // the window belongs to this thread
 		defer runtime.UnlockOSThread()
-		hwnd := showPopup(&popup{title: title, text: text, answer: ch, dismissed: &dismissed,
-			allowLabel: "Let them in", denyLabel: "Not now"})
+		p := &popup{title: title, text: text, answer: ch, dismissed: &dismissed,
+			allowLabel: yes, denyLabel: no, linkLabel: extra}
+		if after > 0 {
+			p.deadline = time.Now().Add(after)
+		}
+		hwnd := showPopup(p)
 		hwndCh <- hwnd
 		if hwnd == 0 {
+			close(ch)
 			return
 		}
 		var m msg
@@ -210,9 +245,18 @@ func showPopup(p *popup) uintptr {
 	}
 	px := func(v float64) int32 { return int32(v*p.scale + 0.5) }
 	p.w, p.h, p.pad, p.iconSize, p.iconGap = px(356), px(128), px(16), px(40), px(12)
+	if p.linkLabel != "" {
+		p.w = px(420)
+	}
 	bh, bw, dw := px(34), px(132), px(100)
+	if !p.deadline.IsZero() {
+		bw = px(150) // room for "(2:59)"
+	}
 	p.allow = rect{p.w - p.pad - bw, p.h - p.pad - bh, p.w - p.pad, p.h - p.pad}
 	p.deny = rect{p.allow.Left - px(8) - dw, p.allow.Top, p.allow.Left - px(8), p.allow.Bottom}
+	if p.linkLabel != "" {
+		p.link = rect{p.pad + px(4), p.allow.Top, p.deny.Left - px(8), p.allow.Bottom}
+	}
 	p.fontSmall = font(px(12), 400)
 	p.fontBold = font(px(15), 600)
 	p.fontButton = font(px(13), 600)
@@ -239,6 +283,9 @@ func showPopup(p *popup) uintptr {
 	popupMu.Lock()
 	popups[hwnd] = p
 	popupMu.Unlock()
+	if procSetWindowDisplayAffinity.Find() == nil {
+		procSetWindowDisplayAffinity.Call(hwnd, 0x11) // WDA_EXCLUDEFROMCAPTURE: friends don't see it
+	}
 
 	// Windows 11: rounded corners and a butter outline. Older Windows just
 	// ignores these.
@@ -250,6 +297,9 @@ func showPopup(p *popup) uintptr {
 	procSetLayeredWindowAttributes.Call(hwnd, 0, 0, 2) // LWA_ALPHA: start invisible, fade in
 	procShowWindow.Call(hwnd, 4)                       // SW_SHOWNOACTIVATE
 	procSetTimer.Call(hwnd, 1, 15, 0)
+	if !p.deadline.IsZero() {
+		procSetTimer.Call(hwnd, 2, 250, 0)
+	}
 	return hwnd
 }
 
@@ -289,6 +339,15 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 		p.paint(hwnd)
 		return 0
 	case wmTimer:
+		if wparam == 2 { // the countdown
+			if !time.Now().Before(p.deadline) {
+				p.result = 4
+				procDestroyWindow.Call(hwnd)
+			} else if p.countdown() != p.shown {
+				procInvalidateRect.Call(hwnd, 0, 0)
+			}
+			return 0
+		}
 		p.alpha += 40
 		if p.alpha >= 255 {
 			p.alpha = 255
@@ -333,8 +392,9 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			procDeleteObject.Call(f)
 		}
 		if p.result != 0 && !p.dismissed.Load() {
-			p.answer <- p.result == 1
+			p.answer <- p.result - 1
 		}
+		close(p.answer) // a dismissed popup answers nothing
 		procPostQuitMessage.Call(0)
 		return 0
 	}
@@ -349,6 +409,8 @@ func (p *popup) hit(lparam uintptr) int {
 		return 1
 	case p.deny.has(x, y):
 		return 2
+	case p.linkLabel != "" && p.link.has(x, y):
+		return 3
 	}
 	return 0
 }
@@ -398,8 +460,26 @@ func (p *popup) paint(hwnd uintptr) {
 	roundRect(mem, p.allow, allow, r)
 	roundRect(mem, p.deny, deny, r)
 	const center = 0x1 | 0x4 | 0x20 | 0x800 // DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
-	text(mem, p.fontButton, 0x00000000, p.allowLabel, p.allow, center)
+	allowLabel := p.allowLabel
+	if !p.deadline.IsZero() {
+		p.shown = p.countdown()
+		allowLabel += " (" + p.shown + ")"
+	}
+	text(mem, p.fontButton, 0x00000000, allowLabel, p.allow, center)
 	text(mem, p.fontButton, colText, p.denyLabel, p.deny, center)
+	if p.linkLabel != "" {
+		link := uint32(colMuted)
+		if p.hot == 3 {
+			link = colText
+		}
+		text(mem, p.fontSmall, link, p.linkLabel, p.link, 0x4|0x20|0x800|0x8000) // DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS
+	}
+}
+
+// countdown is the time left on the yes button, e.g. "2:59".
+func (p *popup) countdown() string {
+	left := max(0, time.Until(p.deadline).Round(time.Second))
+	return fmt.Sprintf("%d:%02d", int(left.Minutes()), int(left.Seconds())%60)
 }
 
 func fill(dc uintptr, r rect, color uint32) {

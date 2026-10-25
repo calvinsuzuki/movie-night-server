@@ -1,5 +1,5 @@
 // Movie night streams one monitor plus selected apps' sound to friends'
-// browsers over WebRTC, through a private invite link (or Tailscale). It lives
+// browsers over WebRTC, through a private invite link (or straight over the home network or Tailscale). It lives
 // in the taskbar tray.
 package main
 
@@ -20,6 +20,9 @@ import (
 	"movienight/tray"
 )
 
+// version is set by the build scripts.
+var version = "dev"
+
 func main() {
 	headless := flag.Bool("headless", false, "share right away without the tray icon (Ctrl+C to stop)")
 	listMonitors := flag.Bool("list-monitors", false, "list capturable monitors and exit")
@@ -39,6 +42,7 @@ func main() {
 		log.SetOutput(io.MultiWriter(f, os.Stderr))
 	}
 	log.SetFlags(log.Ldate | log.Ltime)
+	log.Printf("Movie night %s on %s", version, platform.Describe())
 
 	if !*listMonitors && !platform.SingleInstance() {
 		platform.Alert("Movie night is already running.\nLook for the popcorn icon in the taskbar tray.")
