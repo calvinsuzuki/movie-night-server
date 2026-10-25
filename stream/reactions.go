@@ -52,6 +52,9 @@ type Reactions struct {
 	throwW  map[string]float64
 	hitW    map[string]float64
 	buckets map[string]*bucket // per ticket
+
+	// OnThrow is called for every throw (the sharer sees them too).
+	OnThrow func(Throw)
 }
 
 func NewReactions() *Reactions {
@@ -92,7 +95,6 @@ func (r *Reactions) Add(ticket, name, emoji string) (Throw, error) {
 		return Throw{}, ErrEmoji
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	now := time.Now()
 	b := r.buckets[ticket]
 	if b == nil {
@@ -102,6 +104,7 @@ func (r *Reactions) Add(ticket, name, emoji string) (Throw, error) {
 	b.tokens = min(throwBurst, b.tokens+now.Sub(b.at).Seconds()*throwRate)
 	b.at = now
 	if b.tokens < 1 {
+		r.mu.Unlock()
 		return Throw{}, ErrThrowRate
 	}
 	b.tokens--
@@ -119,6 +122,10 @@ func (r *Reactions) Add(ticket, name, emoji string) (Throw, error) {
 	}
 	close(r.wake)
 	r.wake = make(chan struct{})
+	r.mu.Unlock()
+	if r.OnThrow != nil {
+		r.OnThrow(t)
+	}
 	return t, nil
 }
 

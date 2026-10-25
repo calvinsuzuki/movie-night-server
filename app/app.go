@@ -34,15 +34,24 @@ type App struct {
 	ffmpeg   string
 	cfgPath  string
 	Monitors []capture.Monitor
+	Cameras  []capture.Camera
 
-	mu       sync.Mutex
-	cfg      Config
-	sharing  bool           // a share session is open (link works)
-	paused   bool           // session open, but the picture is frozen
-	base     string         // public address of the web server ("" until known)
-	encoders map[int]string // detected encoder per GPU adapter
-	encoder  string
-	status   string // last problem, shown in the tray
+	mu      sync.Mutex
+	cfg     Config
+	sharing bool   // a share session is open (link works)
+	paused  bool   // session open, but the picture is frozen
+	base    string // public address of the web server ("" until known)
+	// local ties sharing to one of this computer's addresses (home network or
+	// Tailscale) instead of the internet link. Never saved: every launch
+	// starts on the internet link again.
+	local   net.IP
+	session int // counts share sessions, so each new link is copied once
+	// camera replaces the monitor; bubble shows a camera in a corner of it.
+	// Like local, never saved: nobody's camera turns on by itself.
+	camera, bubble *capture.Camera
+	encoders       map[int]string // detected encoder per GPU adapter
+	encoder        string
+	status         string // last problem, shown in the tray
 
 	ctx         context.Context
 	hub         *stream.Hub
@@ -51,7 +60,6 @@ type App struct {
 	handler     http.Handler
 	srv         *http.Server
 	localURL    string // where cloudflared forwards to
-	netCancel   context.CancelFunc
 	shareCancel context.CancelFunc
 	ice         iceCache
 	audio       *audio.Manager
@@ -61,6 +69,8 @@ type App struct {
 
 	// OnRequest is called when someone asks to watch (the tray notifies).
 	OnRequest func(stream.Request)
+	// OnThrow is called when a friend throws an emoji at the screen.
+	OnThrow func(stream.Throw)
 
 	changed chan struct{}
 }
@@ -76,6 +86,10 @@ type State struct {
 	Status   string
 	Config   Config
 	Apps     []audio.AppStatus
+	Local    net.IP          // the address sharing is tied to; nil: the internet link
+	Camera   *capture.Camera // shared instead of the monitor
+	Bubble   *capture.Camera // shown in a corner of the monitor
+	Session  int             // which share session this is (see App.session)
 }
 
 func New(ffmpeg, cfgPath string) (*App, error) {
@@ -88,7 +102,7 @@ func New(ffmpeg, cfgPath string) (*App, error) {
 		cfg.Monitor = 0
 	}
 	return &App{
-		ffmpeg: ffmpeg, cfgPath: cfgPath, Monitors: mons, cfg: cfg,
+		ffmpeg: ffmpeg, cfgPath: cfgPath, Monitors: mons, Cameras: capture.ListCameras(ffmpeg), cfg: cfg,
 		encoders: map[int]string{}, changed: make(chan struct{}, 1),
 	}, nil
 }
@@ -137,6 +151,11 @@ func (a *App) Start(ctx context.Context) error {
 	hub.OnLeave = lobby.Gone
 	a.reactions = stream.NewReactions()
 	a.reactions.SetSounds(assets.SoundOdds())
+	a.reactions.OnThrow = func(t stream.Throw) {
+		if a.OnThrow != nil {
+			a.OnThrow(t)
+		}
+	}
 	a.hub, a.lobby = hub, lobby
 	a.handler = stream.Handler(hub, lobby, a.reactions, hostName(), web.Files(), assets.ViewerFiles())
 
@@ -149,18 +168,17 @@ func (a *App) Start(ctx context.Context) error {
 	return a.startNetwork()
 }
 
-// startNetwork opens the ICE port and the web server for the configured
-// network mode.
+// startNetwork opens the ICE port and the web server: for the internet link
+// (through the tunnel), or on the chosen local address.
 func (a *App) startNetwork() error {
-	ctx, cancel := context.WithCancel(a.ctx)
 	a.mu.Lock()
-	a.netCancel = cancel
+	local := a.local
 	a.mu.Unlock()
 	cfg := a.Config()
 
-	if cfg.Network == NetInternet {
+	if local == nil {
 		// Reachable only through the tunnel: nothing listens on the LAN.
-		if err := a.hub.Listen(net.IPv4zero, cfg.ICEPort, false); err != nil {
+		if err := a.hub.Listen(nil, cfg.ICEPort); err != nil {
 			return fmt.Errorf("%w (is Movie night already running?)", err)
 		}
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -171,36 +189,15 @@ func (a *App) startNetwork() error {
 		return nil
 	}
 
-	// Tailscale only: wait for a tailnet address rather than exposing the LAN.
-	go func() {
-		ip := stream.TailscaleIP()
-		t := time.NewTicker(3 * time.Second)
-		defer t.Stop()
-		for ip == nil {
-			a.setStatus(tailscaleStatus(TailscaleState()))
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-			ip = stream.TailscaleIP()
-		}
-		if err := a.hub.Listen(ip, cfg.ICEPort, true); err != nil {
-			a.setStatus(err.Error())
-			return
-		}
-		ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), strconv.Itoa(cfg.Port)))
-		if err != nil {
-			a.setStatus(fmt.Sprintf("Can't open port %d: %v", cfg.Port, err))
-			return
-		}
-		if ctx.Err() != nil {
-			ln.Close()
-			return
-		}
-		a.setStatus("")
-		a.serveOn(ln, fmt.Sprintf("http://%s:%d", ip, cfg.Port))
-	}()
+	// A local address: friends on that network open http://address:port.
+	if err := a.hub.Listen(local, cfg.ICEPort); err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(local.String(), strconv.Itoa(cfg.Port)))
+	if err != nil {
+		return fmt.Errorf("can't open port %d on %s: %w", cfg.Port, local, err)
+	}
+	a.serveOn(ln, "http://"+ln.Addr().String())
 	return nil
 }
 
@@ -217,12 +214,9 @@ func (a *App) serveOn(ln net.Listener, base string) {
 func (a *App) stopNetwork() {
 	a.StopSharing()
 	a.mu.Lock()
-	cancel, srv := a.netCancel, a.srv
-	a.netCancel, a.srv, a.base, a.localURL = nil, nil, "", ""
+	srv := a.srv
+	a.srv, a.base, a.localURL = nil, "", ""
 	a.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
 	if srv != nil {
 		srv.Close()
 	}
@@ -289,7 +283,8 @@ func (a *App) URL() string {
 
 func (a *App) State() State {
 	a.mu.Lock()
-	st := State{Sharing: a.sharing, Paused: a.paused, Encoder: a.encoder, Status: a.status, Config: a.cfg}
+	st := State{Sharing: a.sharing, Paused: a.paused, Encoder: a.encoder, Status: a.status, Config: a.cfg,
+		Local: a.local, Session: a.session, Camera: a.camera, Bubble: a.bubble}
 	a.mu.Unlock()
 	st.URL = a.URL()
 	if a.hub != nil {
@@ -325,28 +320,32 @@ func (a *App) StartSharing() {
 		return
 	}
 	a.sharing, a.paused = true, false
+	a.session++
 	// Pick up relay settings edited in config.json since launch.
 	fresh := loadConfig(a.cfgPath)
 	a.cfg.TURN, a.cfg.HideIP = fresh.TURN, fresh.HideIP
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.shareCancel = cancel
-	cfg, local := a.cfg, a.localURL
+	cfg, local, addr := a.cfg, a.localURL, a.local
 	a.mu.Unlock()
 
 	a.lobby.Open()
-	if cfg.Network == NetInternet && local == "" {
+	switch {
+	case local == "":
 		a.setStatus("The web server isn't running; see the log")
-	} else if cfg.Network == NetInternet {
+	case addr != nil:
+		a.hub.SetICE(stream.ICEConfig{}) // that address only, no STUN or relay
+		log.Printf("sharing on %s only: invite link %s", addr, a.URL())
+	default:
 		// Re-open the ICE sockets: IPv6 privacy addresses rotate daily, and
 		// nobody is connected yet, so this costs nothing.
-		if err := a.hub.Listen(net.IPv4zero, cfg.ICEPort, false); err != nil {
+		if err := a.hub.Listen(nil, cfg.ICEPort); err != nil {
 			log.Print(err)
 			a.setStatus(err.Error())
 		}
 		go a.keepICEFresh(ctx)
+		go checkNetwork(cfg.ICEPort)
 		a.startTunnel(ctx, local)
-	} else {
-		a.hub.SetICE(stream.ICEConfig{}) // tailnet addresses only
 	}
 	a.startVideo()
 	a.startAudio()
@@ -400,8 +399,8 @@ func (a *App) StopSharing() {
 	a.sharing, a.paused = false, false
 	cancel := a.shareCancel
 	a.shareCancel = nil
-	if a.cfg.Network == NetInternet {
-		a.base = ""
+	if a.local == nil {
+		a.base = "" // the tunnel's address dies with it
 	}
 	a.mu.Unlock()
 	// Tell every page first and give the answers a moment to get out through
@@ -475,22 +474,41 @@ func (a *App) Kick(id string) {
 	a.hub.Remove(id)
 }
 
-// SetNetwork switches between the public link and Tailscale-only. Any open
-// session is ended, because the link changes.
-func (a *App) SetNetwork(mode string) {
-	if mode != NetTailscale {
-		mode = NetInternet
-	}
-	if a.Config().Network == mode {
+// HostKey lets the sharer's own viewer page in without asking (see
+// stream.Lobby.JoinHost).
+func (a *App) HostKey() string { return a.lobby.HostKey() }
+
+// SetLocal ties sharing to one of this computer's addresses (see
+// Addresses), or back to the internet link with nil. It lasts until Movie
+// night quits. The link changes, so an open session restarts with the new
+// one, and everyone has to join again.
+func (a *App) SetLocal(ip net.IP) {
+	a.mu.Lock()
+	same := a.local.Equal(ip)
+	a.mu.Unlock()
+	if same {
 		return
 	}
+	was := a.Sharing()
 	a.stopNetwork()
-	a.update(func(c *Config) { c.Network = mode })
+	a.mu.Lock()
+	a.local = ip
+	a.mu.Unlock()
+	if ip == nil {
+		log.Print("network: back to the internet link")
+	} else {
+		log.Printf("network: sharing on %s only, until Movie night quits", ip)
+	}
 	a.setStatus("")
 	if err := a.startNetwork(); err != nil {
 		log.Print(err)
 		a.setStatus(err.Error())
+		return
 	}
+	if was {
+		a.StartSharing()
+	}
+	a.notify()
 }
 
 func (a *App) SetRequireApproval(on bool) {
@@ -505,27 +523,93 @@ func (a *App) SkipApprovalThisRun() { a.lobby.SetApproval(false) }
 // SetHideIP sends media only through the relay, for viewers joining from now on.
 func (a *App) SetHideIP(on bool) {
 	_, cur := a.update(func(c *Config) { c.HideIP = on })
+	if a.State().Local != nil {
+		return // no relay on a local address
+	}
 	ice := a.hub.ICE()
 	ice.RelayOnly = cur.RelayOnly()
 	a.hub.SetICE(ice)
 }
 
+func (a *App) SetShowOverlay(on bool) { a.update(func(c *Config) { c.ShowOverlay = on }) }
+
+func (a *App) SetAskWhenAlone(on bool) { a.update(func(c *Config) { c.AskWhenAlone = on }) }
+
+// SetMonitor shares monitor i (instead of a camera, if one was shared).
 func (a *App) SetMonitor(i int) {
 	if i < 0 || i >= len(a.Monitors) {
 		return
 	}
-	if old, _ := a.update(func(c *Config) { c.Monitor = i }); old.Monitor != i {
+	a.mu.Lock()
+	wasCamera := a.camera != nil
+	a.camera = nil
+	a.mu.Unlock()
+	if old, _ := a.update(func(c *Config) { c.Monitor = i }); old.Monitor != i || wasCamera {
 		a.restartVideo()
 	}
 }
 
+// SetCamera shares camera i instead of a monitor, until a monitor is picked
+// or Movie night quits.
+func (a *App) SetCamera(i int) {
+	if i < 0 || i >= len(a.Cameras) {
+		return
+	}
+	cam := &a.Cameras[i]
+	a.mu.Lock()
+	same := a.camera == cam
+	a.camera = cam
+	if a.bubble == cam { // a camera can't be opened twice
+		a.bubble = nil
+	}
+	a.mu.Unlock()
+	if !same {
+		log.Printf("video: sharing camera %s", cam)
+		a.notify()
+		a.restartVideo()
+	}
+}
+
+// SetBubble shows camera i small in a corner of the shared monitor; -1
+// turns it off. It lasts until Movie night quits.
+func (a *App) SetBubble(i int) {
+	var cam *capture.Camera
+	if i >= 0 && i < len(a.Cameras) {
+		cam = &a.Cameras[i]
+	}
+	a.mu.Lock()
+	same := a.bubble == cam
+	a.bubble = cam
+	a.mu.Unlock()
+	if !same {
+		if cam != nil {
+			log.Printf("video: camera bubble on (%s)", cam)
+		} else {
+			log.Print("video: camera bubble off")
+		}
+		a.notify()
+		a.restartVideo()
+	}
+}
+
+// SetBubbleCorner moves the camera bubble (capture.BottomRight...).
+func (a *App) SetBubbleCorner(corner string) {
+	if old, _ := a.update(func(c *Config) { c.BubbleCorner = corner }); old.BubbleCorner != corner && a.State().Bubble != nil {
+		a.restartVideo()
+	}
+}
+
+// SetQuality picks a preset and its bitrate, dropping any bitrate picked by
+// hand: a forgotten 500 kbps shouldn't spoil the next movie night.
 func (a *App) SetQuality(id string) {
-	if old, cur := a.update(func(c *Config) { c.Quality = presetByID(id).ID }); old.Quality != cur.Quality {
+	old, cur := a.update(func(c *Config) { c.Quality, c.BitrateKbps = presetByID(id).ID, 0 })
+	if old.Quality != cur.Quality || old.EffectiveKbps() != cur.EffectiveKbps() {
 		a.restartVideo()
 	}
 }
 
-// SetBitrate sets the advanced bitrate in kbps; 0 returns to the preset default.
+// SetBitrate sets the bitrate in kbps, until the next preset is picked; 0
+// returns to the preset's.
 func (a *App) SetBitrate(kbps int) {
 	if old, cur := a.update(func(c *Config) { c.BitrateKbps = kbps }); old.EffectiveKbps() != cur.EffectiveKbps() {
 		a.restartVideo()
@@ -573,10 +657,17 @@ func (a *App) restartVideo() {
 
 func (a *App) captureConfig() capture.Config {
 	cfg := a.Config()
+	a.mu.Lock()
+	camera, bubble := a.camera, a.bubble
+	a.mu.Unlock()
+	if camera != nil {
+		bubble = nil
+	}
 	return capture.Config{
 		FFmpeg: a.ffmpeg, Monitor: a.Monitors[cfg.Monitor], FPS: FPS,
 		Height: presetByID(cfg.Quality).Height, Bitrate: cfg.EffectiveKbps() * 1000,
 		Cursor: true, VideoPort: videoPort, AudioPort: audioPort,
+		Camera: camera, Bubble: bubble, BubbleCorner: cfg.BubbleCorner,
 	}
 }
 
@@ -596,7 +687,14 @@ func (a *App) startVideo() {
 			return
 		}
 		cc.Encoder = enc
-		log.Printf("video: %s → %dp @ %d fps, %d kbps, %s", cc.Monitor, cc.Height, cc.FPS, cc.Bitrate/1000, enc)
+		src := cc.Monitor.String()
+		switch {
+		case cc.Camera != nil:
+			src = "camera " + cc.Camera.Name
+		case cc.Bubble != nil:
+			src += " with camera " + cc.Bubble.Name + " (" + cc.BubbleCorner + ")"
+		}
+		log.Printf("video: %s → %dp @ %d fps, %d kbps, %s", src, cc.Height, cc.FPS, cc.Bitrate/1000, enc)
 		capture.Supervise(ctx, "video", a.ffmpeg, capture.VideoArgs(cc, enc), nil)
 	}()
 }
@@ -607,8 +705,11 @@ func (a *App) encoderFor(cc capture.Config) (string, error) {
 	pref := a.cfg.Encoder
 	a.mu.Unlock()
 	if !ok {
+		// Tried on the monitor alone: opening a camera here would only slow it.
+		probe := cc
+		probe.Camera, probe.Bubble = nil, nil
 		var err error
-		if enc, err = capture.DetectEncoder(cc, pref); err != nil {
+		if enc, err = capture.DetectEncoder(probe, pref); err != nil {
 			return "", err
 		}
 	}

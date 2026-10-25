@@ -90,7 +90,7 @@
     </ul>
   </div>
   <div class="tip">💡 The popup appears on your main screen, so if that's the screen you share, friends see it for a moment too.
-    Prefer no knocking at all? Turn off <strong>Network → Ask me before anyone joins</strong>, and anyone with the
+    Prefer no knocking at all? Turn off <strong>Advanced → Network → Ask me before anyone joins</strong>, and anyone with the
     link gets straight in.</div>
 
   <h2><span class="num">3</span> When the movie's over</h2>
@@ -132,14 +132,14 @@
     <ol>
       <li>Get relay details: either a Cloudflare <strong>TURN key</strong> (Cloudflare dashboard → Realtime → TURN;
         free allowance, then pay per GB) or your own <a href="https://github.com/coturn/coturn">coturn</a> server.</li>
-      <li>Popcorn menu → <strong>Network → Relay server settings…</strong> opens <code>config.json</code>. Fill in the
+      <li>Popcorn menu → <strong>Advanced → Network → Relay server settings…</strong> opens <code>config.json</code>. Fill in the
         <code>"turn"</code> section, for Cloudflare:
         <pre><code>"turn": { "cloudflareKeyId": "…", "cloudflareApiToken": "…" }</code></pre>
         or for your own server:
         <pre><code>"turn": { "urls": ["turn:relay.example.com:3478"], "username": "…", "credential": "…" }</code></pre></li>
       <li>Save the file, then <strong>Stop sharing</strong> and <strong>Start sharing</strong> again.</li>
     </ol>
-    <p>With a relay you can also turn on <strong>Network → Hide my IP</strong>: video then always goes through the relay, so
+    <p>With a relay you can also turn on <strong>Advanced → Network → Hide my IP</strong>: video then always goes through the relay, so
       friends never see your internet address.</p>
   </div>
 
@@ -157,10 +157,11 @@
     </ul>
   </div>
 
-  <h2><span class="num">+</span> Tailscale mode (optional)</h2>
-  <p>Already use <a href="https://tailscale.com">Tailscale</a> with your friends? <strong>Network → Tailscale only</strong>
-    serves the stream on your tailnet address instead of a public link, so only devices on your Tailscale network can even
-    ask to join. Everything else works the same.</p>
+  <h2><span class="num">+</span> Local network or Tailscale (optional)</h2>
+  <p>Watching with someone in the same house, or with friends on your <a href="https://tailscale.com">Tailscale</a>?
+    <strong>Advanced → Network</strong> lists this computer's addresses. Pick one and the link points straight at it
+    (no Cloudflare), so only people on that network can open it; it's copied for you as usual. The choice lasts until
+    you quit Movie night: the next time it starts, it's back on the internet link.</p>
 
   <footer>Open this guide again any time from the popcorn menu → <em>How it works</em>.</footer>
 </div>

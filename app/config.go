@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 
 	"movienight/audio"
+	"movienight/capture"
 )
 
-// Preset is a resolution choice; its bitrate is used unless the sharer picks
-// one under "Bitrate (advanced)".
+// Preset is a resolution choice with its bitrate. Picking a preset again
+// drops a bitrate picked by hand under "Bitrate".
 type Preset struct {
 	ID     string
 	Label  string
@@ -25,8 +26,9 @@ var Presets = []Preset{
 	{"1080p", "1080p · 24 fps", 1080, 5000},
 }
 
-// Bitrates offered in the advanced menu, in kbps.
-var Bitrates = []int{500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000}
+// Bitrates offered in the menu, in kbps. Each preset's bitrate is one of
+// them, so the list always shows what's in use.
+var Bitrates = []int{500, 1500, 3000, 5000, 8000}
 
 func presetByID(id string) Preset {
 	for _, p := range Presets {
@@ -49,26 +51,27 @@ type Config struct {
 	ICEPort     int      `json:"icePort"`
 	Encoder     string   `json:"encoder"` // auto | nvenc | qsv | amf | x264 ...
 
-	// Network is how friends reach you: NetInternet (a public link through a
-	// Cloudflare tunnel) or NetTailscale (only devices on your tailnet).
-	Network string `json:"network"`
 	// RequireApproval: every friend waits until you click Allow.
 	RequireApproval bool       `json:"requireApproval"`
 	HideIP          bool       `json:"hideIp"` // relay-only; needs TURN
 	TURN            TURNConfig `json:"turn"`
-}
 
-const (
-	NetInternet  = "internet"
-	NetTailscale = "tailscale"
-)
+	// ShowOverlay shows who's watching, and the emojis friends throw, in a
+	// corner of the shared screen (Windows; friends don't see it).
+	ShowOverlay bool `json:"showOverlay"`
+	// AskWhenAlone offers to stop sharing after 2 minutes with nobody watching.
+	AskWhenAlone bool `json:"askWhenAlone"`
+	// BubbleCorner is where the camera bubble sits (capture.BottomRight...).
+	BubbleCorner string `json:"bubbleCorner"`
+}
 
 func defaultConfig() Config {
 	return Config{
 		Quality: "1080p", ShareAudio: true, AudioMode: audio.ModeAll,
 		Blocklist: append([]string(nil), audio.DefaultBlocklist...),
 		Port:      8080, ICEPort: 8443, Encoder: "auto",
-		Network: NetInternet, RequireApproval: true,
+		RequireApproval: true,
+		ShowOverlay:     true, AskWhenAlone: true, BubbleCorner: capture.BottomRight,
 	}
 }
 
@@ -95,11 +98,13 @@ func loadConfig(path string) Config {
 	if cfg.Blocklist == nil {
 		cfg.Blocklist = append([]string(nil), audio.DefaultBlocklist...)
 	}
+	switch cfg.BubbleCorner {
+	case capture.BottomLeft, capture.TopRight, capture.TopLeft:
+	default:
+		cfg.BubbleCorner = capture.BottomRight
+	}
 	if cfg.AudioMode != audio.ModeWhitelist {
 		cfg.AudioMode = audio.ModeAll
-	}
-	if cfg.Network != NetTailscale {
-		cfg.Network = NetInternet
 	}
 	return cfg
 }

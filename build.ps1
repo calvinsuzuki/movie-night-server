@@ -62,7 +62,7 @@ Step "Embedding Windows icon and version info"
 
 Step "Building Windows app"
 $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
-go build -trimpath -ldflags "-s -w -H windowsgui" -o dist\windows\movienight.exe .; Check
+go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$Version" -o dist\windows\movienight.exe .; Check
 
 Step "Bundling ffmpeg and cloudflared"
 $ff = (Get-Command ffmpeg -ErrorAction Stop).Source
@@ -79,7 +79,7 @@ if (-not $iscc) { throw "Inno Setup not found: winget install JRSoftware.InnoSet
 
 Step "Building Linux app"
 $env:GOOS = "linux"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
-go build -trimpath -ldflags "-s -w" -o dist\linux\movienight .; Check
+go build -trimpath -ldflags "-s -w -X main.version=$Version" -o dist\linux\movienight .; Check
 Copy-Item (Get-Cloudflared "cloudflared-linux-amd64") dist\linux\cloudflared
 Remove-Item Env:GOOS, Env:GOARCH
 

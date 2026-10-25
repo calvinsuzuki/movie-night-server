@@ -76,7 +76,7 @@ NFPM="$(tool nfpm)"
 [ -n "$NFPM" ] || die "nfpm not found: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest"
 
 step "Building Linux app"
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/linux/movienight .
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o dist/linux/movienight .
 cp "$(get_cloudflared cloudflared-linux-amd64)" dist/linux/cloudflared
 chmod 755 dist/linux/movienight dist/linux/cloudflared
 
@@ -98,7 +98,7 @@ else
 fi
 
 step "Building Windows app"
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui" -o dist/windows/movienight.exe .
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$VERSION" -o dist/windows/movienight.exe .
 cp "$(get_cloudflared cloudflared-windows-amd64.exe)" dist/windows/cloudflared.exe
 
 ISCC=""

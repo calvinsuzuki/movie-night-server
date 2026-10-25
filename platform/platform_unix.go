@@ -14,7 +14,21 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
+
+// Describe names the system for the log, e.g. "Ubuntu 22.04.4 LTS (amd64)".
+func Describe() string {
+	name := runtime.GOOS
+	if b, err := os.ReadFile("/etc/os-release"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
+				name = strings.Trim(v, `"`)
+			}
+		}
+	}
+	return fmt.Sprintf("%s (%s)", name, runtime.GOARCH)
+}
 
 // Command runs a helper program (ffmpeg, cloudflared) that dies with us.
 func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -120,18 +134,55 @@ func Alert(msg string) {
 // true or false when the user clicks; dismiss closes it without an answer.
 // Without zenity it falls back to a plain notification.
 func Ask(title, msg string) (answer <-chan bool, dismiss func()) {
+	choice, dismiss := Choose(title, msg, "Let in", "Deny", "")
 	ch := make(chan bool, 1)
+	go func() {
+		if c, ok := <-choice; ok {
+			ch <- c == 0
+		}
+		close(ch)
+	}()
+	return ch, dismiss
+}
+
+// Choose shows a popup with a yes button, a no button and, if extra isn't
+// empty, a third button, without blocking. answer gets 0 (yes), 1 (no, or
+// the window closed) or 2 (extra); dismiss closes it without an answer.
+func Choose(title, msg, yes, no, extra string) (answer <-chan int, dismiss func()) {
+	return ChooseTimed(title, msg, yes, no, extra, 0)
+}
+
+// ChooseTimed is Choose that gives up after a while: answer then gets 3.
+// zenity can't count down on a button, so the text says when. Zero means
+// never.
+func ChooseTimed(title, msg, yes, no, extra string, after time.Duration) (answer <-chan int, dismiss func()) {
+	ch := make(chan int, 1)
+	if after > 0 {
+		msg += fmt.Sprintf("\n\n%s by itself in %d minutes.", yes, int(after.Minutes()))
+	}
 	if _, err := exec.LookPath("zenity"); err != nil {
 		go exec.Command("notify-send", "-i", "movienight", "-u", "critical", title, msg).Run()
+		close(ch)
 		return ch, func() {}
 	}
-	cmd := exec.Command("zenity", "--question", "--title="+title, "--text="+msg, "--no-wrap",
-		"--ok-label=Let in", "--cancel-label=Deny", "--icon-name=movienight")
+	args := []string{"--question", "--title=" + title, "--text=" + msg, "--no-wrap",
+		"--ok-label=" + yes, "--cancel-label=" + no, "--icon-name=movienight"}
+	if extra != "" {
+		args = append(args, "--extra-button="+extra)
+	}
+	if after > 0 {
+		args = append(args, fmt.Sprintf("--timeout=%d", int(after.Seconds())))
+	}
+	cmd := exec.Command("zenity", args...)
+	var out strings.Builder
+	cmd.Stdout = &out
 	if err := cmd.Start(); err != nil {
+		close(ch)
 		return ch, func() {}
 	}
 	var dismissed atomic.Bool
 	go func() {
+		defer close(ch)
 		err := cmd.Wait()
 		if dismissed.Load() {
 			return
@@ -139,9 +190,16 @@ func Ask(title, msg string) (answer <-chan bool, dismiss func()) {
 		var exit *exec.ExitError
 		switch {
 		case err == nil:
-			ch <- true
-		case errors.As(err, &exit) && exit.ExitCode() == 1: // Deny
-			ch <- false
+			ch <- 0
+		case errors.As(err, &exit) && exit.ExitCode() == 5: // --timeout ran out
+			ch <- 3
+		case errors.As(err, &exit) && exit.ExitCode() == 1:
+			// The extra button also exits with 1, printing its label.
+			if extra != "" && strings.TrimSpace(out.String()) == extra {
+				ch <- 2
+			} else {
+				ch <- 1
+			}
 		}
 	}()
 	return ch, func() {

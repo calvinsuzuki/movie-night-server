@@ -70,7 +70,7 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 
 |  | Feature | What it means for you |
 | :---: | --- | --- |
-| 🔗 | **One private link** | Click *Start sharing*, then *Copy invite link*. The link has a long secret part and stops working the moment you stop sharing. |
+| 🔗 | **One private link** | Click *Start sharing* and the link lands on your clipboard as soon as it works, ready to paste. It has a long secret part and stops working the moment you stop sharing. |
 | 🚪 | **You hold the door** | Every friend knocks first. A popup with a chime asks you to let them in, and you can kick anyone later. Someone you let in who comes back within 2 minutes (same name, same internet address), say after a reload, walks straight in. |
 | 🌍 | **Any browser, any device** | Friends need nothing but the link: phones, tablets and computers all work, iPhone included. |
 | 🔊 | **Pick which sounds to share** | Share all apps or only the ones you tick (say, just the browser or VLC). |
@@ -83,7 +83,10 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 | 🛟 | **Optional relay** | Add a TURN server for the rare networks that block direct connections, and optionally hide your IP. |
 | 🎯 | **Throw emojis at the screen** | Tap the 🍿 above the watcher count and it flies at everyone's screen with your name, a whoosh and, 0.3–0.8 s later, a smack. The little ˄ arrow on the button picks what you throw: 🍿😆😤🤮😭🤭🌚👋👌🤌👊👏💩👀. |
 | 📶 | **Quality and ping on screen** | The top-right corner shows the resolution, frame rate, bitrate and your ping to the host, with a green, butter or red dot. |
-| 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. |
+| 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. On Windows its menu is dressed like the viewer page. |
+| 👀 | **See your audience** | On Windows, the bottom left of the shared screen shows how many friends are watching, plus a bubble with each emoji they throw and who threw it. Friends never see it: it's left out of what you share. |
+| 📷 | **Camera** | Share a webcam instead of the screen, or show it in a small bubble in a corner of the movie, so friends see you laugh. |
+| 💤 | **Nobody watching?** | After 2 minutes of sharing to nobody, Movie night asks whether to end the stream (or never to ask again). The **End stream** button counts down 3 minutes; nobody answers, and it ends by itself. |
 
 <div align="right"><a href="#top">🍿 back to top</a></div>
 
@@ -154,8 +157,8 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
 
 ```text
 🍿  Click the popcorn bucket in the tray → Screen → the monitor with the movie
-🎬  Start sharing                         → wait a few seconds for the link
-🔗  Copy invite link                      → paste it in the group chat
+🎬  Start sharing                         → wait a few seconds: the link is copied for you
+🔗  Paste it in the group chat
 🔔  "Alice wants to watch the movie"      → Yes
 📺  Enjoy. Stop sharing when the credits roll.
 ```
@@ -177,20 +180,25 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
 <summary><b>Everything lives behind the 🍿 in your tray</b></summary>
 <br>
 
+On Windows, clicking the 🍿 opens Movie night's own menu: a dark card with the bucket's red stripes on top. Switches and choices keep it open, so you can change several things in a row; clicking elsewhere or Esc closes it, and the arrow keys and Enter work too. On Ubuntu it's the system menu, with the same items.
+
 | Item | What it does |
 | --- | --- |
-| **● Sharing · 2 watching** | Status at a glance, including any problem. |
-| **Copy invite link** / **Open viewer page** | Grab the link, or open it yourself. |
+| **● Sharing · your-link…** | Status at a glance, including any problem. While sharing it shows the link: click it to copy. The tray icon tells the same story: grey while not sharing, grey with **…** while the link is being made, then colored with a green dot while sharing, a **pause** badge when paused, a **crossed-out speaker** when sound is off, and a blue dot when someone is waiting. |
 | **Start sharing** / **Stop sharing** | Stop disconnects everyone and kills the link; next time you get a new one. |
-| **Pause picture** | Freezes the picture and sound while friends stay connected. |
-| **✓ Let "Alice" in** / **✗ Deny** | Waiting requests, if you missed the popup. They expire after 2 minutes. |
+| **⏸** / **🔗** / **👁** beside Stop | Pause the picture and sound while friends stay connected (▶ resumes), copy the invite link again, or open the viewer page yourself (your name is filled in, and you get in without approving yourself). On Ubuntu: **Pause picture** / **Copy invite link** / **Open viewer page**. |
+| **Waiting to join** | Requests, if you missed the popup: **Let in** or **✕**. They expire after 2 minutes. |
 | **Watching (n)** | Everyone connected. Click a name to remove them. |
-| **Screen** | Which monitor to share. |
-| **Quality** | 480p / 720p / 1080p at 24 fps, plus **Bitrate (advanced)**, 500 kbps to 8 Mbps. |
-| **Sound** | *All apps (except voice chat)* or *Only the apps checked below*. |
-| **Network** | *Internet link* or *Tailscale only*, *Ask me before anyone joins*, *Hide my IP*, *Relay server settings…* |
-| **Start with Windows / at login** | Launch quietly at sign-in. |
-| **How it works** · **Open log** · **Quit** | The guide, diagnostics, and goodbye. |
+| **Screen** | Which monitor to share, or a camera instead (Windows and Ubuntu). While it's open, each monitor shows its number in big in the middle (Windows). |
+| **Camera bubble** | Your webcam in a corner of the shared monitor, with a thin red frame: pick the camera and the corner. Cameras are never switched on by themselves: the choice lasts until you quit. |
+| **Quality** | 480p / 720p / 1080p at 24 fps (1.5, 3 and 5 Mbps), plus **Bitrate**: 500 kbps, 1.5, 3, 5 or 8 Mbps. Picking a preset again resets the bitrate to the preset's, so a forgotten low bitrate doesn't stick. |
+| **Sound** | *All apps (except voice chat)* or *Whitelist apps*, which lists the apps playing sound to pick from. |
+| **Advanced** | Everything you set once: |
+| &nbsp;&nbsp;**Network** | *Internet link*, or one of this computer's addresses (home network, Tailscale) for people on that network only, without Cloudflare; it lasts until you quit. Plus *Ask me before anyone joins*, *Hide my IP*, *Relay server settings…* |
+| &nbsp;&nbsp;**Screen overlays** | The watcher count and emoji bubbles in the corner (Windows), and *Ask to stop when alone* (after 2 minutes with nobody watching). |
+| &nbsp;&nbsp;**Start with Windows / at login** | Launch quietly at sign-in. |
+| &nbsp;&nbsp;**How it works** · **Open log** | The guide and diagnostics. |
+| **Quit** | Goodbye. |
 
 </details>
 
@@ -205,7 +213,9 @@ Settings are saved automatically in `%APPDATA%\MovieNight\config.json` (Windows)
 | `blocklist` | `discord`, `teamspeak`, `ts3client` | Apps whose sound is never shared. |
 | `encoder` | `auto` | Force `nvenc`, `qsv`, `amf` or `x264`. |
 | `icePort` | `8443` | UDP port for the video (one firewall rule). |
-| `port` | `8080` | Web port in *Tailscale only* mode. |
+| `port` | `8080` | Web port when sharing on a local address (Advanced → Network). |
+| `showOverlay` | `true` | The watcher count and emoji bubbles on the shared screen (Windows). |
+| `askWhenAlone` | `true` | Offer to end the stream after 2 minutes with nobody watching. |
 | `turn` | *(none)* | A relay server, see below. |
 
 <details>
@@ -222,7 +232,7 @@ Most friends connect directly. A VPN, strict office or school Wi-Fi, or a few pr
 "turn": { "urls": ["turn:relay.example.com:3478"], "username": "…", "credential": "…" }
 ```
 
-Open it with **Network → Relay server settings…**, save, then *Stop sharing* and *Start sharing* again. With a relay you can also turn on **Hide my IP**, so friends never see your internet address.
+Open it with **Advanced → Network → Relay server settings…**, save, then *Stop sharing* and *Start sharing* again. With a relay you can also turn on **Hide my IP**, so friends never see your internet address.
 
 </details>
 
@@ -254,7 +264,11 @@ Edit it and rebuild. To add your own sound, drop a `throw-*.mp3` or `hit-*.mp3` 
    - Press **Win + R**, run `ncpa.cpl`, open the adapter's **Properties**, and tick **Internet Protocol Version 6**.
    - If that doesn't do it, an optimizer or VPN tool may have disabled IPv6 system-wide.
 3. **Still stuck?** Add a [relay server](#%EF%B8%8F-configuration), which handles every remaining case.
-4. **Open log** shows exactly what their browser offered, which explains every failed attempt.
+4. **Advanced → Open log** explains every failed attempt:
+   - `network check:` lines, each time you start sharing: whether UDP gets out at all, whether your router is a *friendly* NAT (one public port for everyone) or a *strict* one (a new port per destination, which friends on mobile data can't get through), and whether IPv6 works.
+   - `the browser offered` / `we offered`: the addresses each side brought.
+   - `connection checks:` for a friend who never connected: every pair of addresses tried, how many checks went out, and whether anything came back.
+   - `browser report from …`: the friend's own browser's view of the same failure (its addresses, network type and the paths it tried), sent automatically, so you don't need logs from their phone.
 
 </details>
 
@@ -325,6 +339,7 @@ movie-night-server/
 ├── capture/             🖥️ ffmpeg pipelines, encoder detection, monitor list
 ├── audio/               🔊 per-app capture (WASAPI / PulseAudio), mixer, blocklist
 ├── tray/                🍿 the popcorn menu, popups and sounds
+├── ui/                  🖌️ Windows: the drawn menu and the on-screen overlay (Direct2D)
 ├── platform/            🪟🐧 OS glue: clipboard, autostart, popups, child cleanup
 ├── web/static/          📱 the viewer page (HTML, CSS, JS)
 ├── assets/              🎨 icons, sounds, the "How it works" guide

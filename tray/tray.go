@@ -1,10 +1,13 @@
-// Package tray is Movie night's only UI: a menu on the taskbar tray icon
-// (Windows notification area / Ubuntu AppIndicator).
+// Package tray is Movie night's home: the popcorn icon in the taskbar tray
+// (Windows notification area / Ubuntu AppIndicator) and its menu. On
+// Windows the menu, and the overlay on the shared screen, are Movie night's
+// own (package ui); elsewhere the menu is the system's.
 package tray
 
 import (
 	"fmt"
 	"log"
+	"net"
 	"path/filepath"
 	"sync"
 	"time"
@@ -14,8 +17,10 @@ import (
 	"movienight/app"
 	"movienight/assets"
 	"movienight/audio"
+	"movienight/capture"
 	"movienight/platform"
 	"movienight/stream"
+	"movienight/ui"
 )
 
 // systray menus are static, so items are reserved up front and hidden.
@@ -25,45 +30,94 @@ const (
 	viewerSlots  = 10
 )
 
+// aloneAfter is how long sharing with nobody watching goes before Movie
+// night asks whether to stop.
+const aloneAfter = 2 * time.Minute
+
+// aloneGrace is how long that question waits for an answer before the
+// stream ends by itself.
+const aloneGrace = 3 * time.Minute
+
+// bubbleCorners are where the camera bubble can sit, as the menus name them.
+var bubbleCorners = []struct{ id, label string }{
+	{capture.BottomRight, "Bottom right"}, {capture.BottomLeft, "Bottom left"},
+	{capture.TopRight, "Top right"}, {capture.TopLeft, "Top left"},
+}
+
+// addrSlots is how many local addresses the system menu can list.
+const addrSlots = 6
+
 type menu struct {
 	a       *app.App
 	logPath string
+	custom  bool // our own menu (ui) instead of the system's
 
-	status, copyLink, openPage, share, pause     *systray.MenuItem
-	waitingHeader                                *systray.MenuItem
-	allowItems, denyItems                        []*systray.MenuItem
-	watching, nobody                             *systray.MenuItem
-	viewerItems                                  []*systray.MenuItem
-	monitors                                     []*systray.MenuItem
-	presets                                      []*systray.MenuItem
-	bitrateAuto                                  *systray.MenuItem
-	bitrates                                     []*systray.MenuItem
-	shareSound, modeAll, modeList, noApps        *systray.MenuItem
-	appItems                                     []*systray.MenuItem
-	netInternet, netTailscale, approval, hideIP  *systray.MenuItem
-	relay                                        *systray.MenuItem
-	blockedInfo, autostart, guide, openLog, quit *systray.MenuItem
+	status, copyLink, openPage, share, pause *systray.MenuItem
+	waitingHeader                            *systray.MenuItem
+	allowItems, denyItems                    []*systray.MenuItem
+	watching, nobody                         *systray.MenuItem
+	viewerItems                              []*systray.MenuItem
+	monitors                                 []*systray.MenuItem
+	cameras, bubbles, corners                []*systray.MenuItem
+	bubbleOff                                *systray.MenuItem
+	presets                                  []*systray.MenuItem
+	bitrates                                 []*systray.MenuItem
+	shareSound, modeAll, modeList, noApps    *systray.MenuItem
+	appItems                                 []*systray.MenuItem
+	netInternet, approval, hideIP            *systray.MenuItem
+	addrItems                                []*systray.MenuItem
+	relay, askAlone                          *systray.MenuItem
+	autostart, guide, openLog, quit          *systray.MenuItem
 
-	mu       sync.Mutex
-	appNames []string          // which app each slot currently shows
-	tickets  []string          // which request each slot shows
-	popups   map[string]func() // open "wants to watch" popups by ticket, with their close func
-	viewers  []string          // which viewer each slot shows
-	icon     int
+	mu          sync.Mutex
+	appNames    []string          // which app each slot currently shows
+	tickets     []string          // which request each slot shows
+	popups      map[string]func() // open "wants to watch" popups by ticket, with their close func
+	viewers     []string          // which viewer each slot shows
+	icon        string
+	copiedUntil time.Time     // "Copied ✓" next to Copy invite link
+	autoCopied  int           // the share session whose link went to the clipboard on its own
+	addrs       []app.Address // which address each network slot shows
+	aloneSince  time.Time     // sharing with nobody watching since
+	askedAlone  bool
+	aloneClose  func() // closes the "streaming alone" popup
 }
 
 // Run blocks until the user quits from the menu.
 func Run(a *app.App, logPath string) {
-	m := &menu{a: a, logPath: logPath, icon: -1, popups: map[string]func(){}}
+	m := &menu{a: a, logPath: logPath, popups: map[string]func(){}}
 	a.OnRequest = m.knock
+	a.OnThrow = m.thrown
 	systray.Run(m.build, func() {})
 }
 
 func (m *menu) build() {
-	systray.SetIcon(assets.Tray(assets.TrayPaused))
+	systray.SetIcon(assets.Tray(assets.TrayIdle))
 	systray.SetTitle("")
 	systray.SetTooltip(platform.AppName)
 
+	if m.custom = ui.Supported(); m.custom {
+		open := func() { ui.ShowMenu(m.items) }
+		systray.SetOnTapped(open)
+		systray.SetOnSecondaryTapped(open)
+	} else {
+		m.buildNative()
+	}
+
+	m.refresh()
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		for {
+			select {
+			case <-t.C:
+			case <-m.a.Changed():
+			}
+			m.refresh()
+		}
+	}()
+}
+
+func (m *menu) buildNative() {
 	m.status = systray.AddMenuItem(platform.AppName, "")
 	m.status.Disable()
 	m.copyLink = systray.AddMenuItem("Copy invite link", "Send this link to your friends")
@@ -110,6 +164,27 @@ func (m *menu) build() {
 		m.monitors = append(m.monitors, screen.AddSubMenuItemCheckbox(mon.String(), "", false))
 		m.onClick(m.monitors[i], func() { m.a.SetMonitor(i) })
 	}
+	for i, cam := range m.a.Cameras {
+		item := screen.AddSubMenuItemCheckbox("Camera · "+cam.Name, "Share this camera instead of a monitor", false)
+		m.cameras = append(m.cameras, item)
+		m.onClick(item, func() { m.a.SetCamera(i) })
+	}
+	if len(m.a.Cameras) > 0 {
+		bubble := systray.AddMenuItem("Camera bubble", "A camera in a corner of the shared monitor")
+		m.bubbleOff = bubble.AddSubMenuItemCheckbox("Off", "", true)
+		m.onClick(m.bubbleOff, func() { m.a.SetBubble(-1) })
+		for i, cam := range m.a.Cameras {
+			item := bubble.AddSubMenuItemCheckbox(cam.Name, "", false)
+			m.bubbles = append(m.bubbles, item)
+			m.onClick(item, func() { m.a.SetBubble(i) })
+		}
+		bubble.AddSeparator()
+		for _, c := range bubbleCorners {
+			item := bubble.AddSubMenuItemCheckbox(c.label, "", false)
+			m.corners = append(m.corners, item)
+			m.onClick(item, func() { m.a.SetBubbleCorner(c.id) })
+		}
+	}
 
 	quality := systray.AddMenuItem("Quality", "Resolution and bitrate")
 	for _, p := range app.Presets {
@@ -118,10 +193,7 @@ func (m *menu) build() {
 		m.onClick(item, func() { m.a.SetQuality(p.ID) })
 	}
 	quality.AddSeparator()
-	adv := quality.AddSubMenuItem("Bitrate (advanced)", "Override the preset's bitrate")
-	m.bitrateAuto = adv.AddSubMenuItemCheckbox("Automatic (preset default)", "", false)
-	m.onClick(m.bitrateAuto, func() { m.a.SetBitrate(0) })
-	adv.AddSeparator()
+	adv := quality.AddSubMenuItem("Bitrate", "Until the next preset is picked")
 	for _, b := range app.Bitrates {
 		item := adv.AddSubMenuItemCheckbox(kbps(b), "", false)
 		m.bitrates = append(m.bitrates, item)
@@ -134,7 +206,7 @@ func (m *menu) build() {
 	sound.AddSeparator()
 	m.modeAll = sound.AddSubMenuItemCheckbox("All apps (except voice chat)", "", false)
 	m.onClick(m.modeAll, func() { m.a.SetAudioMode(audio.ModeAll) })
-	m.modeList = sound.AddSubMenuItemCheckbox("Only the apps checked below", "Whitelist", false)
+	m.modeList = sound.AddSubMenuItemCheckbox("Whitelist apps", "Only the apps checked below", false)
 	m.onClick(m.modeList, func() { m.a.SetAudioMode(audio.ModeWhitelist) })
 	sound.AddSeparator()
 	m.noApps = sound.AddSubMenuItem("No apps are playing sound", "")
@@ -155,15 +227,26 @@ func (m *menu) build() {
 			}
 		})
 	}
-	sound.AddSeparator()
-	m.blockedInfo = sound.AddSubMenuItem("Discord and TeamSpeak are never shared", "Voice chat would echo back to your friends")
-	m.blockedInfo.Disable()
 
 	network := systray.AddMenuItem("Network", "How friends reach you")
 	m.netInternet = network.AddSubMenuItemCheckbox("Internet link (anyone you let in)", "A private link through Cloudflare; video goes directly to each friend", false)
-	m.onClick(m.netInternet, func() { m.a.SetNetwork(app.NetInternet) })
-	m.netTailscale = network.AddSubMenuItemCheckbox("Tailscale only", "Only devices on your Tailscale network", false)
-	m.onClick(m.netTailscale, func() { m.a.SetNetwork(app.NetTailscale) })
+	m.onClick(m.netInternet, func() { m.a.SetLocal(nil) })
+	for i := 0; i < addrSlots; i++ {
+		item := network.AddSubMenuItemCheckbox("", "Only this network, until Movie night quits", false)
+		item.Hide()
+		m.addrItems = append(m.addrItems, item)
+		m.onClick(item, func() {
+			m.mu.Lock()
+			var ip net.IP
+			if i < len(m.addrs) {
+				ip = m.addrs[i].IP
+			}
+			m.mu.Unlock()
+			if ip != nil {
+				m.a.SetLocal(ip)
+			}
+		})
+	}
 	network.AddSeparator()
 	m.approval = network.AddSubMenuItemCheckbox("Ask me before anyone joins", "Off: anyone with the link gets in", true)
 	m.onClick(m.approval, func() { m.a.SetRequireApproval(!m.a.Config().RequireApproval) })
@@ -173,56 +256,27 @@ func (m *menu) build() {
 	m.onClick(m.relay, func() { platform.Open(m.a.ConfigPath()) })
 
 	systray.AddSeparator()
+	m.askAlone = systray.AddMenuItemCheckbox("Ask to stop when nobody's watching", "After 2 minutes of sharing to nobody", true)
+	m.onClick(m.askAlone, func() { m.a.SetAskWhenAlone(!m.a.Config().AskWhenAlone) })
 	m.autostart = systray.AddMenuItemCheckbox(platform.AutostartLabel(), "", platform.AutostartEnabled())
 	m.guide = systray.AddMenuItem("How it works", "Inviting friends, the relay, Tailscale mode")
 	m.openLog = systray.AddMenuItem("Open log", m.logPath)
 	m.quit = systray.AddMenuItem("Quit "+platform.AppName, "")
 
 	m.onClick(m.copyLink, func() {
-		if err := platform.CopyText(m.a.URL()); err != nil {
-			platform.Alert("Couldn't copy the link: " + err.Error() + "\n\n" + m.a.URL())
+		if !m.copy() {
 			return
 		}
 		m.copyLink.SetTitle("Copied ✓")
 		time.AfterFunc(2*time.Second, func() { m.copyLink.SetTitle("Copy invite link") })
 	})
-	m.onClick(m.openPage, func() { platform.Open(m.a.URL()) })
-	m.onClick(m.share, func() {
-		if m.a.Sharing() {
-			m.a.StopSharing()
-		} else {
-			m.a.StartSharing()
-		}
-	})
-	m.onClick(m.pause, func() {
-		if m.a.State().Paused {
-			m.a.Resume()
-		} else {
-			m.a.Pause()
-		}
-	})
-	m.onClick(m.autostart, func() {
-		on := !platform.AutostartEnabled()
-		if err := platform.SetAutostart(on); err != nil {
-			log.Printf("autostart: %v", err)
-		}
-		m.refresh()
-	})
+	m.onClick(m.openPage, m.openViewerPage)
+	m.onClick(m.share, m.toggleSharing)
+	m.onClick(m.pause, m.togglePause)
+	m.onClick(m.autostart, m.toggleAutostart)
 	m.onClick(m.guide, OpenGuide)
-	m.onClick(m.openLog, func() { platform.Open(filepath.Clean(m.logPath)) })
+	m.onClick(m.openLog, m.showLog)
 	m.onClick(m.quit, systray.Quit)
-
-	m.refresh()
-	go func() {
-		t := time.NewTicker(2 * time.Second)
-		for {
-			select {
-			case <-t.C:
-			case <-m.a.Changed():
-			}
-			m.refresh()
-		}
-	}()
 }
 
 func (m *menu) onClick(item *systray.MenuItem, fn func()) {
@@ -232,6 +286,72 @@ func (m *menu) onClick(item *systray.MenuItem, fn func()) {
 			m.refresh()
 		}
 	}()
+}
+
+func (m *menu) toggleSharing() {
+	if m.a.Sharing() {
+		m.a.StopSharing()
+	} else {
+		m.a.StartSharing()
+	}
+}
+
+func (m *menu) togglePause() {
+	if m.a.State().Paused {
+		m.a.Resume()
+	} else {
+		m.a.Pause()
+	}
+}
+
+func (m *menu) toggleAutostart() {
+	if err := platform.SetAutostart(!platform.AutostartEnabled()); err != nil {
+		log.Printf("autostart: %v", err)
+	}
+	m.refresh()
+}
+
+// openViewerPage opens the stream in the browser as the host's own tab: the
+// page fills in their name and gets in without asking.
+func (m *menu) openViewerPage() { platform.Open(m.a.URL() + "#host=" + m.a.HostKey()) }
+
+func (m *menu) showLog() { platform.Open(filepath.Clean(m.logPath)) }
+
+// copy puts the invite link on the clipboard, and says so if it can't.
+func (m *menu) copy() bool {
+	url := m.a.URL()
+	if err := copyText(url); err != nil {
+		platform.Alert("Couldn't copy the link: " + err.Error() + "\n\n" + url)
+		return false
+	}
+	m.mu.Lock()
+	m.copiedUntil = time.Now().Add(2 * time.Second)
+	m.mu.Unlock()
+	time.AfterFunc(2*time.Second, ui.RefreshMenu)
+	return true
+}
+
+// copyText retries for a moment: another app may be holding the clipboard.
+func copyText(s string) error {
+	var err error
+	for try := 0; try < 5; try++ {
+		if err = platform.CopyText(s); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
+}
+
+// autoCopy puts a new share's link on the clipboard as soon as it works,
+// so it's ready to paste in the group chat.
+func (m *menu) autoCopy(url string) {
+	if err := copyText(url); err != nil {
+		log.Printf("couldn't copy the invite link: %v", err)
+		return
+	}
+	log.Print("invite link copied to the clipboard")
+	ui.Toast("🔗", "Invite link copied · paste it to your friends", 5*time.Second)
 }
 
 // knock pops up "X wants to watch — let them in?" with a sound. The menu's
@@ -253,6 +373,55 @@ func (m *menu) knock(r stream.Request) {
 		m.mu.Lock()
 		delete(m.popups, r.Ticket)
 		m.mu.Unlock()
+		m.refresh()
+	}()
+}
+
+// thrown shows a friend's emoji in the overlay, so the sharer sees it too.
+func (m *menu) thrown(t stream.Throw) {
+	if m.a.Config().ShowOverlay {
+		ui.Bubble(t.Emoji, t.Name, ui.BubbleTime)
+	}
+}
+
+// askIfAlone offers to stop sharing once nobody has watched for a while;
+// m.mu must be held.
+func (m *menu) askIfAlone(st app.State) {
+	if !st.Sharing || st.URL == "" || len(st.Viewers) > 0 || len(st.Requests) > 0 {
+		m.aloneSince, m.askedAlone = time.Time{}, false
+		if m.aloneClose != nil { // someone came after all
+			m.aloneClose()
+			m.aloneClose = nil
+		}
+		return
+	}
+	if m.aloneSince.IsZero() {
+		m.aloneSince = time.Now()
+	}
+	if m.askedAlone || !st.Config.AskWhenAlone || time.Since(m.aloneSince) < aloneAfter {
+		return
+	}
+	m.askedAlone = true
+	log.Print("nobody has watched for 2 minutes: asking whether to stop")
+	// No answer within aloneGrace: the sharer has likely walked away.
+	answer, dismiss := platform.ChooseTimed(platform.AppName, "You are streaming alone.",
+		"End stream", "Keep going", "Don't ask again", aloneGrace)
+	m.aloneClose = dismiss
+	go func() {
+		c, ok := <-answer
+		m.mu.Lock()
+		m.aloneClose = nil
+		m.mu.Unlock()
+		switch {
+		case !ok:
+		case c == 0:
+			m.a.StopSharing()
+		case c == 2:
+			m.a.SetAskWhenAlone(false)
+		case c == 3:
+			log.Print("nobody watched and nobody answered for 3 minutes: stopping")
+			m.a.StopSharing()
+		}
 		m.refresh()
 	}()
 }
@@ -295,46 +464,119 @@ func setVisible(item *systray.MenuItem, on bool) {
 	}
 }
 
+func watchingText(n int) string { return fmt.Sprintf("%d watching", n) }
+
+// statusLine is the menu's one-line summary.
+func statusLine(st app.State) string {
+	watching := watchingText(len(st.Viewers))
+	switch {
+	case st.Status != "":
+		return "⚠ " + st.Status
+	case !st.Sharing:
+		return "Not sharing"
+	case st.URL == "":
+		return "Creating your link…"
+	case st.Paused:
+		return "❚❚ Paused · " + watching
+	}
+	return "● Sharing · " + watching
+}
+
+// overlayText is the overlay's pill: how many are watching, or why nobody can yet.
+func overlayText(st app.State) string {
+	n := len(st.Viewers)
+	switch {
+	case st.URL == "":
+		return "Creating your link…"
+	case st.Paused:
+		return "Paused · " + watchingText(n)
+	case n == 0:
+		return "Nobody's watching yet"
+	}
+	return watchingText(n)
+}
+
+func overlayTone(st app.State) ui.Tone {
+	switch {
+	case st.Status != "":
+		return ui.ToneBad
+	case len(st.Viewers) > 0 && !st.Paused:
+		return ui.ToneLive
+	}
+	return ui.ToneWarn
+}
+
+// trayIcon picks the icon for the state: grey until there's a link to
+// share, with a badge for what's going on.
+func trayIcon(st app.State) string {
+	switch {
+	case len(st.Requests) > 0:
+		return assets.TrayRequest
+	case !st.Sharing:
+		return assets.TrayIdle
+	case st.URL == "":
+		return assets.TrayLoading
+	case st.Paused:
+		return assets.TrayPaused
+	case !st.Config.ShareAudio:
+		return assets.TrayMuted
+	}
+	return assets.TrayLive
+}
+
 func (m *menu) refresh() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := m.a.State()
 	cfg := st.Config
 
-	watching := fmt.Sprintf("%d watching", len(st.Viewers))
-	switch {
-	case st.Status != "":
-		m.status.SetTitle("⚠ " + st.Status)
-	case !st.Sharing:
-		m.status.SetTitle("Not sharing")
-	case st.URL == "":
-		m.status.SetTitle("Creating your link…")
-	case st.Paused:
-		m.status.SetTitle("❚❚ Paused · " + watching)
-	default:
-		m.status.SetTitle("● Sharing · " + watching)
-	}
 	tip := platform.AppName + " — not sharing"
 	if st.Sharing {
-		tip = platform.AppName + " — " + watching
+		tip = platform.AppName + " — " + watchingText(len(st.Viewers))
 	}
 	if len(st.Requests) > 0 {
 		tip += fmt.Sprintf(", %d waiting", len(st.Requests))
 	}
 	systray.SetTooltip(tip)
 
-	icon := assets.TrayPaused
-	switch {
-	case len(st.Requests) > 0:
-		icon = assets.TrayRequest
-	case st.Sharing && !st.Paused:
-		icon = assets.TrayNormal
-	}
+	icon := trayIcon(st)
 	if icon != m.icon {
 		systray.SetIcon(assets.Tray(icon))
 		m.icon = icon
 	}
 
+	// Close popups for requests answered elsewhere or expired.
+	pending := map[string]bool{}
+	for _, r := range st.Requests {
+		pending[r.Ticket] = true
+	}
+	for t, dismiss := range m.popups {
+		if !pending[t] {
+			dismiss()
+			delete(m.popups, t)
+		}
+	}
+
+	if st.Sharing && st.URL != "" && m.autoCopied != st.Session {
+		m.autoCopied = st.Session
+		go m.autoCopy(st.URL)
+	}
+	m.askIfAlone(st)
+
+	if m.custom {
+		mon := m.a.Monitors[cfg.Monitor]
+		ui.SetStatus(ui.Status{Visible: st.Sharing && cfg.ShowOverlay, Text: overlayText(st), Tone: overlayTone(st),
+			Adapter: mon.Adapter, Output: mon.Output})
+		ui.RefreshMenu()
+		return
+	}
+	m.refreshNative(st)
+}
+
+// refreshNative updates the system menu's items; m.mu must be held.
+func (m *menu) refreshNative(st app.State) {
+	cfg := st.Config
+	m.status.SetTitle(statusLine(st))
 	setEnabled(m.copyLink, st.URL != "")
 	setEnabled(m.openPage, st.URL != "")
 	if st.Sharing {
@@ -349,17 +591,7 @@ func (m *menu) refresh() {
 		m.pause.SetTitle("Pause picture")
 	}
 
-	// Waiting requests; close popups for requests answered elsewhere or expired.
-	pending := map[string]bool{}
-	for _, r := range st.Requests {
-		pending[r.Ticket] = true
-	}
-	for t, dismiss := range m.popups {
-		if !pending[t] {
-			dismiss()
-			delete(m.popups, t)
-		}
-	}
+	// Waiting requests.
 	m.tickets = m.tickets[:0]
 	setVisible(m.waitingHeader, len(st.Requests) > 0)
 	for i := range m.allowItems {
@@ -392,14 +624,27 @@ func (m *menu) refresh() {
 	}
 
 	for i, item := range m.monitors {
-		setChecked(item, i == cfg.Monitor)
+		setChecked(item, st.Camera == nil && i == cfg.Monitor)
+	}
+	for i, item := range m.cameras {
+		setChecked(item, st.Camera == &m.a.Cameras[i])
+	}
+	if m.bubbleOff != nil {
+		setChecked(m.bubbleOff, st.Bubble == nil)
+		setEnabled(m.bubbleOff, st.Camera == nil)
+		for i, item := range m.bubbles {
+			setChecked(item, st.Bubble == &m.a.Cameras[i])
+			setEnabled(item, st.Camera == nil)
+		}
+		for i, item := range m.corners {
+			setChecked(item, cfg.BubbleCorner == bubbleCorners[i].id)
+		}
 	}
 	for i, item := range m.presets {
 		setChecked(item, app.Presets[i].ID == cfg.Quality)
 	}
-	setChecked(m.bitrateAuto, cfg.BitrateKbps == 0)
 	for i, item := range m.bitrates {
-		setChecked(item, app.Bitrates[i] == cfg.BitrateKbps)
+		setChecked(item, app.Bitrates[i] == cfg.EffectiveKbps())
 	}
 
 	setChecked(m.shareSound, cfg.ShareAudio)
@@ -409,26 +654,17 @@ func (m *menu) refresh() {
 	m.appNames = m.appNames[:0]
 	shown := 0
 	for _, ap := range st.Apps {
-		if shown >= len(m.appItems) {
+		// Only whitelist mode lists apps, and voice chat is never offered.
+		if shown >= len(m.appItems) || cfg.AudioMode != audio.ModeWhitelist {
 			break
 		}
+		if ap.Blocked {
+			continue
+		}
 		item := m.appItems[shown]
-		title := ap.Display
-		switch {
-		case ap.Blocked:
-			title += " — voice chat, never shared"
-		case !ap.Running:
-			title += " (not playing)"
-		}
-		item.SetTitle(title)
-		// The check shows whether friends hear the app (or, in whitelist mode, whether
-		// it's whitelisted); only whitelist mode lets you toggle it.
-		if cfg.AudioMode == audio.ModeWhitelist {
-			setChecked(item, !ap.Blocked && containsApp(cfg.Whitelist, ap.Name))
-		} else {
-			setChecked(item, ap.Sharing)
-		}
-		setEnabled(item, !ap.Blocked && cfg.AudioMode == audio.ModeWhitelist && cfg.ShareAudio)
+		item.SetTitle(appTitle(ap))
+		setChecked(item, appChecked(cfg, ap))
+		setEnabled(item, appToggleable(cfg, ap))
 		item.Show()
 		m.appNames = append(m.appNames, ap.Name)
 		shown++
@@ -436,16 +672,50 @@ func (m *menu) refresh() {
 	for i := shown; i < len(m.appItems); i++ {
 		m.appItems[i].Hide()
 	}
-	setVisible(m.noApps, shown == 0)
+	setVisible(m.noApps, shown == 0 && cfg.AudioMode == audio.ModeWhitelist)
 
-	setChecked(m.netInternet, cfg.Network == app.NetInternet)
-	setChecked(m.netTailscale, cfg.Network == app.NetTailscale)
+	setChecked(m.netInternet, st.Local == nil)
+	m.addrs = localChoices(st)
+	for i, item := range m.addrItems {
+		if i < len(m.addrs) {
+			item.SetTitle(m.addrs[i].String())
+			setChecked(item, m.addrs[i].IP.Equal(st.Local))
+			item.Show()
+		} else {
+			item.Hide()
+		}
+	}
 	setChecked(m.approval, cfg.RequireApproval)
 	setChecked(m.hideIP, cfg.RelayOnly())
-	setEnabled(m.hideIP, cfg.Network == app.NetInternet && cfg.TURN.Configured())
-	setEnabled(m.relay, cfg.Network == app.NetInternet)
+	setEnabled(m.hideIP, st.Local == nil && cfg.TURN.Configured())
+	setEnabled(m.relay, st.Local == nil)
 
+	setChecked(m.askAlone, cfg.AskWhenAlone)
 	setChecked(m.autostart, platform.AutostartEnabled())
+}
+
+func appTitle(ap audio.AppStatus) string {
+	switch {
+	case ap.Blocked:
+		return ap.Display + " — voice chat, never shared"
+	case !ap.Running:
+		return ap.Display + " (not playing)"
+	}
+	return ap.Display
+}
+
+// appChecked shows whether friends hear the app (or, in whitelist mode,
+// whether it's whitelisted).
+func appChecked(cfg app.Config, ap audio.AppStatus) bool {
+	if cfg.AudioMode == audio.ModeWhitelist {
+		return !ap.Blocked && containsApp(cfg.Whitelist, ap.Name)
+	}
+	return ap.Sharing
+}
+
+// appToggleable: only whitelist mode lets you pick apps.
+func appToggleable(cfg app.Config, ap audio.AppStatus) bool {
+	return !ap.Blocked && cfg.AudioMode == audio.ModeWhitelist && cfg.ShareAudio
 }
 
 func since(t time.Time) string {

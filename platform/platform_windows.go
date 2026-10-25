@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -30,6 +31,12 @@ func init() {
 		return
 	}
 	windows.AssignProcessToJobObject(job, windows.CurrentProcess()) // handle kept until exit
+}
+
+// Describe names the system for the log, e.g. "Windows 10.0.26100 (amd64)".
+func Describe() string {
+	v := windows.RtlGetVersion()
+	return fmt.Sprintf("Windows %d.%d.%d (%s)", v.MajorVersion, v.MinorVersion, v.BuildNumber, runtime.GOARCH)
 }
 
 // Command runs a console program (ffmpeg) without flashing a console window.

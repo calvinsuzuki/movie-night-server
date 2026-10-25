@@ -10,18 +10,8 @@ import (
 )
 
 var (
-	//go:embed tray.ico
-	trayICO []byte
-	//go:embed tray-paused.ico
-	trayPausedICO []byte
-	//go:embed tray.png
-	trayPNG []byte
-	//go:embed tray-paused.png
-	trayPausedPNG []byte
-	//go:embed tray-request.ico
-	trayRequestICO []byte
-	//go:embed tray-request.png
-	trayRequestPNG []byte
+	//go:embed tray-*.ico tray-*.png
+	trayIcons embed.FS
 
 	//go:embed icon-128.png
 	Icon128 []byte
@@ -106,20 +96,24 @@ func Sounds() (throw, hit []string) {
 	return throw, hit
 }
 
-// Tray icon variants.
+// Tray icon variants: the popcorn is grey until there's a link to share,
+// and a badge in the corner tells the state.
 const (
-	TrayNormal  = iota
-	TrayPaused  // greyed out: not sharing, or paused
-	TrayRequest // blue dot: someone is waiting to be let in
+	TrayIdle    = "idle"    // grey: not sharing
+	TrayLoading = "loading" // grey, "…": creating the link
+	TrayLive    = "live"    // green dot: sharing
+	TrayPaused  = "paused"  // grey, pause bars: picture frozen
+	TrayMuted   = "muted"   // red, crossed-out speaker: sharing without sound
+	TrayRequest = "request" // blue dot: someone is waiting to be let in
 )
 
 // Tray returns the tray icon in the format the OS tray expects (ICO on
 // Windows, PNG elsewhere).
-func Tray(variant int) []byte {
-	ico := [...][]byte{trayICO, trayPausedICO, trayRequestICO}
-	png := [...][]byte{trayPNG, trayPausedPNG, trayRequestPNG}
+func Tray(variant string) []byte {
+	ext := ".png"
 	if runtime.GOOS == "windows" {
-		return ico[variant]
+		ext = ".ico"
 	}
-	return png[variant]
+	b, _ := trayIcons.ReadFile("tray-" + variant + ext)
+	return b
 }

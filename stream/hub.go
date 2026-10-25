@@ -42,17 +42,6 @@ func IsTailnet(ip net.IP) bool {
 	return false
 }
 
-// TailscaleIP returns this machine's Tailscale IPv4 address, if any.
-func TailscaleIP() net.IP {
-	addrs, _ := net.InterfaceAddrs()
-	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && IsTailnet(ipn.IP) {
-			return ipn.IP
-		}
-	}
-	return nil
-}
-
 // Viewer is a connected friend, as shown in the tray.
 type Viewer struct {
 	ID, Name string
@@ -64,6 +53,7 @@ type peer struct {
 	sender    *webrtc.RTPSender // to look up which network path was chosen
 	name      string
 	offered   string // the browser's candidates, summarized for the log
+	started   time.Time
 	connected time.Time
 	dropTimer *time.Timer
 }
@@ -118,11 +108,11 @@ func NewHub() (*Hub, error) {
 var skipInterfaces = []string{"vethernet", "wsl", "docker", "virtualbox", "vmware", "hyper-v", "loopback", "br-", "veth"}
 
 // Listen (re)opens the UDP port ICE uses (one firewall rule), dropping every
-// viewer. With tailnetOnly it listens on listenIP and only Tailscale
-// addresses are offered. Otherwise it listens on every IPv4 and IPv6
-// address: LAN and public (STUN) IPv4, and IPv6, which usually needs no NAT
-// traversal at all and so reaches friends whose IPv4 is behind strict NAT.
-func (h *Hub) Listen(listenIP net.IP, icePort int, tailnetOnly bool) error {
+// viewer. With only set it listens on that address alone and offers nothing
+// else (a LAN or Tailscale address). Otherwise it listens on every IPv4 and
+// IPv6 address: LAN and public (STUN) IPv4, and IPv6, which usually needs no
+// NAT traversal at all and so reaches friends whose IPv4 is behind strict NAT.
+func (h *Hub) Listen(only net.IP, icePort int) error {
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterDefaultCodecs(); err != nil {
 		return err
@@ -136,14 +126,18 @@ func (h *Hub) Listen(listenIP net.IP, icePort int, tailnetOnly bool) error {
 	h.Close()
 	se := webrtc.SettingEngine{}
 	var mux ice.UDPMux
-	if tailnetOnly {
-		udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: listenIP, Port: icePort})
+	if only != nil {
+		network, kind := "udp4", webrtc.NetworkTypeUDP4
+		if only.To4() == nil {
+			network, kind = "udp6", webrtc.NetworkTypeUDP6
+		}
+		udp, err := net.ListenUDP(network, &net.UDPAddr{IP: only, Port: icePort})
 		if err != nil {
 			return fmt.Errorf("ICE port %d: %w", icePort, err)
 		}
 		mux = webrtc.NewICEUDPMux(nil, udp)
-		se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
-		se.SetIPFilter(IsTailnet)
+		se.SetNetworkTypes([]webrtc.NetworkType{kind})
+		se.SetIPFilter(func(ip net.IP) bool { return ip.Equal(only) })
 	} else {
 		var err error
 		mux, err = ice.NewMultiUDPMuxFromPort(icePort,
@@ -341,10 +335,15 @@ func (h *Hub) Answer(offerSDP, name string) (id, answerSDP string, err error) {
 	<-gathered
 
 	id = newID()
-	p := &peer{pc: pc, sender: first, name: name, offered: summarizeCandidates(offerSDP)}
+	p := &peer{pc: pc, sender: first, name: name, offered: summarizeCandidates(offerSDP), started: time.Now()}
 	h.mu.Lock()
 	h.peers[id] = p
 	h.mu.Unlock()
+	log.Printf("viewer %s (%s): the browser offered %s", id, name, p.offered)
+	log.Printf("viewer %s (%s): we offered %s", id, name, summarizeCandidates(pc.LocalDescription().SDP))
+	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
+		log.Printf("viewer %s (%s): ICE %s after %.1f s", id, name, s, time.Since(p.started).Seconds())
+	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		h.mu.Lock()
 		if p.dropTimer != nil {
@@ -389,11 +388,12 @@ func (h *Hub) Remove(id string) bool {
 	if !ok {
 		return false
 	}
-	p.pc.Close()
 	if p.connected.IsZero() {
 		// Explains "couldn't reach the host directly" afterwards.
-		log.Printf("viewer %s (%s) never connected; the browser offered: %s", id, p.name, p.offered)
+		log.Printf("viewer %s (%s) never connected after %.0f s; the browser offered: %s", id, p.name, time.Since(p.started).Seconds(), p.offered)
+		log.Printf("viewer %s (%s) connection checks: %s", id, p.name, iceChecks(p.pc))
 	}
+	p.pc.Close()
 	log.Printf("viewer %s (%s) left (%d watching)", id, p.name, h.Count())
 	if h.OnLeave != nil {
 		h.OnLeave(id)
@@ -506,6 +506,53 @@ func summarizeCandidates(sdp string) string {
 		return "no UDP candidates (VPN or firewall blocking WebRTC?)"
 	}
 	return strings.Join(out, ", ")
+}
+
+// iceChecks describes each pair of addresses ICE tried and how far it got,
+// e.g. "us host 192.168.0.5:8443 → them srflx 177.1.2.3:50000: failed,
+// sent 9 checks, 0 answered, got 0 from them". "Got 0" on every pair means
+// nothing from the browser ever arrived: something drops the packets on the
+// way in (our router or firewall) or the browser never sent any.
+func iceChecks(pc *webrtc.PeerConnection) string {
+	cands := map[string]webrtc.ICECandidateStats{}
+	var pairs []webrtc.ICECandidatePairStats
+	for _, st := range pc.GetStats() {
+		switch v := st.(type) {
+		case webrtc.ICECandidateStats:
+			cands[v.ID] = v
+		case webrtc.ICECandidatePairStats:
+			pairs = append(pairs, v)
+		}
+	}
+	if len(pairs) == 0 {
+		return "no pair of addresses to try (the browser's addresses were hidden or of another IP version)"
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].RequestsSent+pairs[i].RequestsReceived > pairs[j].RequestsSent+pairs[j].RequestsReceived
+	})
+	desc := func(id string) string {
+		c, ok := cands[id]
+		if !ok {
+			return "?"
+		}
+		return fmt.Sprintf("%s %s", c.CandidateType, net.JoinHostPort(c.IP, fmt.Sprint(c.Port)))
+	}
+	var out []string
+	heard := false
+	for i, p := range pairs {
+		heard = heard || p.RequestsReceived > 0 || p.ResponsesReceived > 0
+		if i < 8 {
+			out = append(out, fmt.Sprintf("us %s → them %s: %s, sent %d checks, %d answered, got %d from them",
+				desc(p.LocalCandidateID), desc(p.RemoteCandidateID), p.State, p.RequestsSent, p.ResponsesReceived, p.RequestsReceived))
+		}
+	}
+	if len(pairs) > 8 {
+		out = append(out, fmt.Sprintf("and %d more", len(pairs)-8))
+	}
+	if !heard {
+		out = append([]string{"nothing from the browser arrived on any path"}, out...)
+	}
+	return strings.Join(out, "; ")
 }
 
 // selectedPath describes the candidate pair a connected viewer uses.

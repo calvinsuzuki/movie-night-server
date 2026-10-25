@@ -3,13 +3,17 @@ package stream
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode"
 )
 
 // Handler serves everything a viewer needs, all under /s/<token>/ so that a
@@ -17,7 +21,7 @@ import (
 //
 //	GET    /s/{token}/                 viewer page (and its css/js)
 //	GET    /s/{token}/config           STUN/TURN servers, the host's name and throwable emojis
-//	POST   /s/{token}/join             {name} → {ticket}
+//	POST   /s/{token}/join             {name, host?} → {ticket}; host is the sharer's own key
 //	GET    /s/{token}/join/{ticket}    long-poll the sharer's answer (?while=watching: a kick)
 //	DELETE /s/{token}/join/{ticket}    withdraw the request
 //	POST   /s/{token}/whep             SDP offer (X-Ticket header) → answer
@@ -25,6 +29,7 @@ import (
 //	GET    /s/{token}/watchers         who's watching (?ticket=, long-poll with ?since=)
 //	POST   /s/{token}/throw            {ticket, emoji}: throw it at everyone's screen
 //	GET    /s/{token}/throws           throws to animate (?ticket=, long-poll with ?since=)
+//	POST   /s/{token}/report           the browser's view of a failed connection, for the log
 //
 // extra holds in-memory files served next to the page (sounds and
 // backgrounds).
@@ -61,8 +66,13 @@ func Handler(h *Hub, l *Lobby, rx *Reactions, host string, page fs.FS, extra map
 		if !validToken(w, r, l) {
 			return
 		}
-		var body struct{ Name string }
+		var body struct{ Name, Host string }
 		json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body)
+		if t, ok := l.JoinHost(body.Name, clientIP(r), body.Host); ok {
+			log.Printf("%s (the host) joined their own stream", cleanName(body.Name))
+			writeJSON(w, http.StatusCreated, map[string]string{"ticket": t})
+			return
+		}
 		t, err := l.Join(body.Name, clientIP(r))
 		if err != nil {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
@@ -152,6 +162,43 @@ func Handler(h *Hub, l *Lobby, rx *Reactions, host string, page fs.FS, extra map
 		throws, seq := rx.Since(since, 25*time.Second)
 		writeJSON(w, http.StatusOK, map[string]any{"seq": seq, "throws": throws})
 	})
+	// When a connection fails, the page sends what its browser saw, so the
+	// sharer's log shows both ends (friends on phones can't send logs).
+	var reportMu sync.Mutex
+	reports := map[string]int{} // per ticket
+	mux.HandleFunc("POST /s/{token}/report", func(w http.ResponseWriter, r *http.Request) {
+		if !validToken(w, r, l) {
+			return
+		}
+		var body struct {
+			Ticket, Reason, Browser, Network, State string
+			GatherMs                                int
+			Gathered                                bool
+			Local, Pairs                            []string
+		}
+		json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&body)
+		name, ok := l.Name(body.Ticket)
+		reportMu.Lock()
+		if len(reports) > 1000 {
+			clear(reports)
+		}
+		reports[body.Ticket]++
+		tooMany := reports[body.Ticket] > 5
+		reportMu.Unlock()
+		if !ok || tooMany {
+			http.Error(w, "no", http.StatusForbidden)
+			return
+		}
+		gathered := "all found"
+		if !body.Gathered {
+			gathered = "still looking when the offer went out"
+		}
+		log.Printf("browser report from %s: %s (%s); %s; network: %s; addresses gathered in %d ms, %s",
+			name, clean(body.Reason), clean(body.State), clean(body.Browser), clean(body.Network), body.GatherMs, gathered)
+		log.Printf("browser report from %s: its addresses: %s", name, cleanList(body.Local))
+		log.Printf("browser report from %s: paths it tried: %s", name, cleanList(body.Pairs))
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("DELETE /s/{token}/join/{ticket}", func(w http.ResponseWriter, r *http.Request) {
 		if !validToken(w, r, l) {
 			return
@@ -235,6 +282,35 @@ func clientIP(r *http.Request) string {
 		}
 	}
 	return host
+}
+
+// clean makes text from a browser safe for one log line.
+func clean(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	if r := []rune(s); len(r) > 200 {
+		s = string(r[:200]) + "…"
+	}
+	return s
+}
+
+func cleanList(list []string) string {
+	if len(list) == 0 {
+		return "none"
+	}
+	var out []string
+	for i, s := range list {
+		if i == 12 {
+			out = append(out, fmt.Sprintf("and %d more", len(list)-12))
+			break
+		}
+		out = append(out, clean(s))
+	}
+	return strings.Join(out, "; ")
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
