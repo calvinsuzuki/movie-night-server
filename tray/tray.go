@@ -75,6 +75,7 @@ type menu struct {
 	popups      map[string]func() // open "wants to watch" popups by ticket, with their close func
 	viewers     []string          // which viewer each slot shows
 	icon        string
+	tip         string
 	copiedUntil time.Time     // "Copied ✓" next to Copy invite link
 	autoCopied  int           // the share session whose link went to the clipboard on its own
 	addrs       []app.Address // which address each network slot shows
@@ -133,8 +134,8 @@ func (m *menu) buildNative() {
 	for i := 0; i < requestSlots; i++ {
 		allow := systray.AddMenuItem("", "Let them watch")
 		deny := systray.AddMenuItem("", "Turn them away")
-		allow.Hide()
-		deny.Hide()
+		setVisible(allow, false)
+		setVisible(deny, false)
 		m.allowItems = append(m.allowItems, allow)
 		m.denyItems = append(m.denyItems, deny)
 		m.onClick(allow, func() { m.withTicket(i, m.a.Allow) })
@@ -145,7 +146,7 @@ func (m *menu) buildNative() {
 	m.nobody.Disable()
 	for i := 0; i < viewerSlots; i++ {
 		item := m.watching.AddSubMenuItem("", "Disconnect them; they'd have to ask again")
-		item.Hide()
+		setVisible(item, false)
 		m.viewerItems = append(m.viewerItems, item)
 		m.onClick(item, func() {
 			m.mu.Lock()
@@ -215,7 +216,7 @@ func (m *menu) buildNative() {
 	m.noApps.Disable()
 	for i := 0; i < appSlots; i++ {
 		item := sound.AddSubMenuItemCheckbox("", "", false)
-		item.Hide()
+		setVisible(item, false)
 		m.appItems = append(m.appItems, item)
 		m.onClick(item, func() {
 			m.mu.Lock()
@@ -237,7 +238,7 @@ func (m *menu) buildNative() {
 	m.onClick(m.netInternet, func() { m.a.SetLocal(nil) })
 	for i := 0; i < addrSlots; i++ {
 		item := network.AddSubMenuItemCheckbox("", "Only this network, until Movie night quits", false)
-		item.Hide()
+		setVisible(item, false)
 		m.addrItems = append(m.addrItems, item)
 		m.onClick(item, func() {
 			m.mu.Lock()
@@ -277,8 +278,8 @@ func (m *menu) buildNative() {
 		if !m.copy() {
 			return
 		}
-		m.copyLink.SetTitle("Copied ✓")
-		time.AfterFunc(2*time.Second, func() { m.copyLink.SetTitle("Copy invite link") })
+		setTitle(m.copyLink, "Copied ✓")
+		time.AfterFunc(2*time.Second, func() { setTitle(m.copyLink, "Copy invite link") })
 	})
 	m.onClick(m.openPage, m.openViewerPage)
 	m.onClick(m.share, m.toggleSharing)
@@ -458,19 +459,44 @@ func setChecked(item *systray.MenuItem, on bool) {
 	}
 }
 
+// Every change to an item makes the AppIndicator rebuild the whole menu,
+// closing it if it's open, so items are only touched when they really
+// change: the menu is refreshed every 2 seconds.
+var itemState = struct {
+	sync.Mutex
+	title  map[*systray.MenuItem]string
+	hidden map[*systray.MenuItem]bool
+}{title: map[*systray.MenuItem]string{}, hidden: map[*systray.MenuItem]bool{}}
+
+func setTitle(item *systray.MenuItem, title string) {
+	itemState.Lock()
+	defer itemState.Unlock()
+	if old, ok := itemState.title[item]; !ok || old != title {
+		itemState.title[item] = title
+		item.SetTitle(title)
+	}
+}
+
 func setEnabled(item *systray.MenuItem, on bool) {
-	if on {
-		item.Enable()
-	} else {
-		item.Disable()
+	if on == item.Disabled() {
+		if on {
+			item.Enable()
+		} else {
+			item.Disable()
+		}
 	}
 }
 
 func setVisible(item *systray.MenuItem, on bool) {
-	if on {
-		item.Show()
-	} else {
-		item.Hide()
+	itemState.Lock()
+	defer itemState.Unlock()
+	if itemState.hidden[item] == on {
+		itemState.hidden[item] = !on
+		if on {
+			item.Show()
+		} else {
+			item.Hide()
+		}
 	}
 }
 
@@ -531,7 +557,10 @@ func (m *menu) refresh() {
 	if len(st.Requests) > 0 {
 		tip += fmt.Sprintf(", %d waiting", len(st.Requests))
 	}
-	systray.SetTooltip(tip)
+	if tip != m.tip {
+		systray.SetTooltip(tip)
+		m.tip = tip
+	}
 
 	icon := trayIcon(st)
 	if icon != m.icon {
@@ -570,20 +599,20 @@ func (m *menu) refresh() {
 // refreshNative updates the system menu's items; m.mu must be held.
 func (m *menu) refreshNative(st app.State) {
 	cfg := st.Config
-	m.status.SetTitle(headerLine(st, time.Now().Before(m.copiedUntil)))
+	setTitle(m.status, headerLine(st, time.Now().Before(m.copiedUntil)))
 	setEnabled(m.status, st.Sharing && st.URL != "")
 	setEnabled(m.copyLink, st.URL != "")
 	setEnabled(m.openPage, st.URL != "")
 	if st.Sharing {
-		m.share.SetTitle("Stop sharing (disconnects everyone)")
+		setTitle(m.share, "Stop sharing (disconnects everyone)")
 	} else {
-		m.share.SetTitle("Start sharing")
+		setTitle(m.share, "Start sharing")
 	}
 	setVisible(m.pause, st.Sharing)
 	if st.Paused {
-		m.pause.SetTitle("Resume picture")
+		setTitle(m.pause, "Resume picture")
 	} else {
-		m.pause.SetTitle("Pause picture")
+		setTitle(m.pause, "Pause picture")
 	}
 
 	// Waiting requests.
@@ -592,29 +621,29 @@ func (m *menu) refreshNative(st app.State) {
 	for i := range m.allowItems {
 		if i < len(st.Requests) {
 			r := st.Requests[i]
-			m.allowItems[i].SetTitle(fmt.Sprintf("✓ Let “%s” in", r.Name))
-			m.denyItems[i].SetTitle(fmt.Sprintf("    ✗ Deny “%s”", r.Name))
-			m.allowItems[i].Show()
-			m.denyItems[i].Show()
+			setTitle(m.allowItems[i], fmt.Sprintf("✓ Let “%s” in", r.Name))
+			setTitle(m.denyItems[i], fmt.Sprintf("    ✗ Deny “%s”", r.Name))
+			setVisible(m.allowItems[i], true)
+			setVisible(m.denyItems[i], true)
 			m.tickets = append(m.tickets, r.Ticket)
 		} else {
-			m.allowItems[i].Hide()
-			m.denyItems[i].Hide()
+			setVisible(m.allowItems[i], false)
+			setVisible(m.denyItems[i], false)
 		}
 	}
 
 	// Viewers.
 	m.viewers = m.viewers[:0]
-	m.watching.SetTitle(fmt.Sprintf("Watching (%d)", len(st.Viewers)))
+	setTitle(m.watching, fmt.Sprintf("Watching (%d)", len(st.Viewers)))
 	setVisible(m.nobody, len(st.Viewers) == 0)
 	for i, item := range m.viewerItems {
 		if i < len(st.Viewers) {
 			v := st.Viewers[i]
-			item.SetTitle(fmt.Sprintf("%s · %s — Kick", v.Name, since(v.Since)))
-			item.Show()
+			setTitle(item, fmt.Sprintf("%s · %s — Kick", v.Name, since(v.Since)))
+			setVisible(item, true)
 			m.viewers = append(m.viewers, v.ID)
 		} else {
-			item.Hide()
+			setVisible(item, false)
 		}
 	}
 
@@ -657,15 +686,15 @@ func (m *menu) refreshNative(st app.State) {
 			continue
 		}
 		item := m.appItems[shown]
-		item.SetTitle(appTitle(ap))
+		setTitle(item, appTitle(ap))
 		setChecked(item, appChecked(cfg, ap))
 		setEnabled(item, appToggleable(cfg, ap))
-		item.Show()
+		setVisible(item, true)
 		m.appNames = append(m.appNames, ap.Name)
 		shown++
 	}
 	for i := shown; i < len(m.appItems); i++ {
-		m.appItems[i].Hide()
+		setVisible(m.appItems[i], false)
 	}
 	setVisible(m.noApps, shown == 0 && cfg.AudioMode == audio.ModeWhitelist)
 
@@ -673,11 +702,11 @@ func (m *menu) refreshNative(st app.State) {
 	m.addrs = localChoices(st)
 	for i, item := range m.addrItems {
 		if i < len(m.addrs) {
-			item.SetTitle(m.addrs[i].String())
+			setTitle(item, m.addrs[i].String())
 			setChecked(item, m.addrs[i].IP.Equal(st.Local))
-			item.Show()
+			setVisible(item, true)
 		} else {
-			item.Hide()
+			setVisible(item, false)
 		}
 	}
 	setChecked(m.approval, cfg.RequireApproval)
