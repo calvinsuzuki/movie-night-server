@@ -83,7 +83,7 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 | 🛟 | **Optional relay** | Add a TURN server for the rare networks that block direct connections, and optionally hide your IP. |
 | 🎯 | **Throw emojis at the screen** | Tap the 🍿 above the watcher count and it flies at everyone's screen with your name, a whoosh and, 0.3–0.8 s later, a smack. The little ˄ arrow on the button picks what you throw: 🍿😆😤🤮😭🤭🌚👋👌🤌👊👏💩👀. |
 | 📶 | **Quality and ping on screen** | The top-right corner shows the resolution, frame rate, bitrate and your ping to the host, with a green, butter or red dot. |
-| 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. On Windows its menu is dressed like the viewer page. |
+| 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. Its menu is dressed like the viewer page. |
 | 👀 | **See your audience** | On Windows, the bottom left of the shared screen shows how many friends are watching, plus a bubble with each emoji they throw and who threw it. Friends never see it: it's left out of what you share. |
 | 📷 | **Camera** | Share a webcam instead of the screen, or show it in a small bubble in a corner of the movie, so friends see you laugh. |
 | 💤 | **Nobody watching?** | After 2 minutes of sharing to nobody, Movie night asks whether to end the stream (or never to ask again). The **End stream** button counts down 3 minutes; nobody answers, and it ends by itself. |
@@ -180,13 +180,13 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
 <summary><b>Everything lives behind the 🍿 in your tray</b></summary>
 <br>
 
-On Windows, clicking the 🍿 opens Movie night's own menu: a dark card with the bucket's red stripes on top. Switches and choices keep it open, so you can change several things in a row; clicking elsewhere or Esc closes it, and the arrow keys and Enter work too. On Ubuntu it's the system menu, with the same items.
+Clicking the 🍿 opens Movie night's own menu: a dark card with the bucket's red stripes on top. Switches and choices keep it open, so you can change several things in a row; clicking elsewhere or Esc closes it, and the arrow keys and Enter work too. On Ubuntu the click shows a small system menu first: pick **🍿 Open popcorn menu**, or double-click (or middle-click) the bucket to skip it. Without GTK 3 you get the system menu, with the same items.
 
 | Item | What it does |
 | --- | --- |
 | **● Sharing · your-link…** | Status at a glance, including any problem. While sharing it shows the link: click it to copy. The tray icon tells the same story: grey while not sharing, grey with **…** while the link is being made, then colored with a green dot while sharing, a **pause** badge when paused, a **crossed-out speaker** when sound is off, and a blue dot when someone is waiting. |
 | **Start sharing** / **Stop sharing** | Stop disconnects everyone and kills the link; next time you get a new one. |
-| **⏸** / **🔗** / **👁** beside Stop | Pause the picture and sound while friends stay connected (▶ resumes), copy the invite link again, or open the viewer page yourself (your name is filled in, and you get in without approving yourself). On Ubuntu: **Pause picture** / **Copy invite link** / **Open viewer page**. |
+| **⏸** / **🔗** / **👁** beside Stop | Pause the picture and sound while friends stay connected (▶ resumes), copy the invite link again, or open the viewer page yourself (your name is filled in, and you get in without approving yourself). |
 | **Waiting to join** | Requests, if you missed the popup: **Let in** or **✕**. They expire after 2 minutes. |
 | **Watching (n)** | Everyone connected. Click a name to remove them. |
 | **Screen** | Which monitor to share, or a camera instead (Windows and Ubuntu). While it's open, each monitor shows its number in big in the middle (Windows). |
@@ -339,7 +339,7 @@ movie-night-server/
 ├── capture/             🖥️ ffmpeg pipelines, encoder detection, monitor list
 ├── audio/               🔊 per-app capture (WASAPI / PulseAudio), mixer, blocklist
 ├── tray/                🍿 the popcorn menu, popups and sounds
-├── ui/                  🖌️ Windows: the drawn menu and the on-screen overlay (Direct2D)
+├── ui/                  🖌️ the drawn menu (Direct2D / GTK + cairo) and the Windows on-screen overlay
 ├── platform/            🪟🐧 OS glue: clipboard, autostart, popups, child cleanup
 ├── web/static/          📱 the viewer page (HTML, CSS, JS)
 ├── assets/              🎨 icons, sounds, the "How it works" guide

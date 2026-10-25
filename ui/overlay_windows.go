@@ -11,31 +11,6 @@ import (
 // each emoji a friend throws ("🍿 Ana") and the odd note ("Invite link
 // copied"). Clicks go straight through it to the movie.
 
-// Palette (the viewer page's style.css).
-var (
-	butter    = rgb(0xf8de8d)
-	butterHot = rgb(0xffebb0)
-	red       = rgb(0xab1313)
-	redDeep   = rgb(0x901010)
-	salt      = rgb(0xffffff)
-	theater   = rgb(0x000000)
-	live      = rgb(0x3ccf7a)
-	panelBg   = rgb(0x0d0d10)
-	muted     = salt.with(0.68)
-)
-
-func toneColor(t Tone) color {
-	switch t {
-	case ToneLive:
-		return live
-	case ToneWarn:
-		return butter
-	case ToneBad:
-		return red
-	}
-	return muted
-}
-
 const (
 	popIn   = 220 * time.Millisecond
 	fadeOut = 350 * time.Millisecond

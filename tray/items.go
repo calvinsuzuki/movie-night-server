@@ -2,6 +2,7 @@ package tray
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -14,7 +15,8 @@ import (
 	"movienight/ui"
 )
 
-// items is the popcorn menu as Movie night draws it itself (Windows). It
+// items is the popcorn menu as Movie night draws it itself (Windows and
+// Ubuntu). It
 // runs on the UI thread every time the menu is redrawn.
 func (m *menu) items() []ui.Item {
 	st := m.a.State()
@@ -79,13 +81,7 @@ func (m *menu) items() []ui.Item {
 		m.screenSection(st), m.bubbleSection(st), qualitySection(m.a, cfg), soundSection(m.a, st),
 		ui.Item{Kind: ui.Section, ID: "advanced", Label: "Advanced", Children: []ui.Item{
 			networkSection(m.a, st),
-			{Kind: ui.Section, ID: "overlay", Label: "Screen overlays", Children: []ui.Item{
-				{Kind: ui.Toggle, ID: "show overlay", Label: "Watchers and emoji bubbles", Checked: cfg.ShowOverlay,
-					OnClick: func() { m.a.SetShowOverlay(!m.a.Config().ShowOverlay) }, KeepOpen: true},
-				{Kind: ui.Toggle, ID: "ask alone", Label: "Ask to stop when alone", Checked: cfg.AskWhenAlone,
-					OnClick: func() { m.a.SetAskWhenAlone(!m.a.Config().AskWhenAlone) }, KeepOpen: true},
-				{Kind: ui.Note, ID: "overlay note", Label: "Friends never see these: they're left out of what you share."},
-			}},
+			m.overlaySection(cfg),
 			{Kind: ui.Toggle, ID: "autostart", Label: platform.AutostartLabel(), Checked: platform.AutostartEnabled(),
 				OnClick: m.toggleAutostart, KeepOpen: true},
 			{Kind: ui.Action, ID: "guide", Label: "How it works", OnClick: OpenGuide},
@@ -95,6 +91,22 @@ func (m *menu) items() []ui.Item {
 		ui.Item{Kind: ui.Action, ID: "quit", Label: "Quit " + platform.AppName, OnClick: systray.Quit},
 	)
 	return items
+}
+
+// overlaySection holds what pops up on your screen. Only Windows has the
+// overlay: X11 can't leave it out of the capture.
+func (m *menu) overlaySection(cfg app.Config) ui.Item {
+	alone := ui.Item{Kind: ui.Toggle, ID: "ask alone", Label: "Ask to stop when alone", Checked: cfg.AskWhenAlone,
+		OnClick: func() { m.a.SetAskWhenAlone(!m.a.Config().AskWhenAlone) }, KeepOpen: true}
+	if runtime.GOOS != "windows" {
+		return alone
+	}
+	return ui.Item{Kind: ui.Section, ID: "overlay", Label: "Screen overlays", Children: []ui.Item{
+		{Kind: ui.Toggle, ID: "show overlay", Label: "Watchers and emoji bubbles", Checked: cfg.ShowOverlay,
+			OnClick: func() { m.a.SetShowOverlay(!m.a.Config().ShowOverlay) }, KeepOpen: true},
+		alone,
+		{Kind: ui.Note, ID: "overlay note", Label: "Friends never see these: they're left out of what you share."},
+	}}
 }
 
 // screenSection picks what friends see: a monitor or a camera.

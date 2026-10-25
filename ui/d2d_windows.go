@@ -87,24 +87,6 @@ func f32(v float32) uintptr { return uintptr(math.Float32bits(v)) }
 // point packs a D2D1_POINT_2F, which is passed by value in one register.
 func point(x, y float32) uintptr { return f32(x) | f32(y)<<32 }
 
-type color struct{ R, G, B, A float32 }
-
-// rgb is a palette color; with sets its opacity.
-func rgb(hex uint32) color {
-	return color{float32(hex>>16&0xff) / 255, float32(hex>>8&0xff) / 255, float32(hex&0xff) / 255, 1}
-}
-
-func (c color) with(a float32) color { c.A = a; return c }
-
-type rectF struct{ L, T, R, B float32 }
-
-func (r rectF) w() float32                    { return r.R - r.L }
-func (r rectF) h() float32                    { return r.B - r.T }
-func (r rectF) inset(dx, dy float32) rectF    { return rectF{r.L + dx, r.T + dy, r.R - dx, r.B - dy} }
-func (r rectF) has(x, y float32) bool         { return x >= r.L && x < r.R && y >= r.T && y < r.B }
-func (r rectF) shift(dx, dy float32) rectF    { return rectF{r.L + dx, r.T + dy, r.R + dx, r.B + dy} }
-func (r rectF) cut(l, t, rr, b float32) rectF { return rectF{r.L + l, r.T + t, r.R - rr, r.B - b} }
-
 type roundedRect struct {
 	rectF
 	RX, RY float32
@@ -137,15 +119,6 @@ type bitmapInfo struct {
 	XPelsPerMeter, YPelsPerMtr int32
 	ClrUsed, ClrImportant      uint32
 	Colors                     [1]uint32
-}
-
-// font picks a text style. Text is centered vertically in its box; without
-// Wrap it stays on one line and ends in "…" when it doesn't fit.
-type font struct {
-	Size   float32
-	Weight int // 400 regular, 600 semibold, 700 bold
-	Align  int // 0 left, 1 right, 2 center
-	Wrap   bool
 }
 
 // gfx holds the factories; it belongs to the UI thread.

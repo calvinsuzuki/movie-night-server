@@ -1,7 +1,8 @@
 // Package tray is Movie night's home: the popcorn icon in the taskbar tray
 // (Windows notification area / Ubuntu AppIndicator) and its menu. On
-// Windows the menu, and the overlay on the shared screen, are Movie night's
-// own (package ui); elsewhere the menu is the system's.
+// Windows and Ubuntu the menu is Movie night's own (package ui), as is the
+// overlay on the shared screen on Windows; elsewhere the menu is the
+// system's.
 package tray
 
 import (
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -104,6 +106,9 @@ func (m *menu) build() {
 		open := func() { ui.ShowMenu(m.items) }
 		systray.SetOnTapped(open)
 		systray.SetOnSecondaryTapped(open)
+		if runtime.GOOS == "linux" {
+			m.buildLauncher(open)
+		}
 	} else {
 		m.buildNative()
 	}
@@ -119,6 +124,16 @@ func (m *menu) build() {
 			m.refresh()
 		}
 	}()
+}
+
+// buildLauncher is the system menu next to our own: Ubuntu's tray shows it
+// on a click and only passes double and middle clicks on to us.
+func (m *menu) buildLauncher(open func()) {
+	item := systray.AddMenuItem("🍿 Open popcorn menu", "Or double-click the popcorn")
+	systray.AddSeparator()
+	m.quit = systray.AddMenuItem("Quit "+platform.AppName, "")
+	m.onClick(item, open)
+	m.onClick(m.quit, systray.Quit)
 }
 
 func (m *menu) buildNative() {

@@ -1,12 +1,13 @@
-// Package ui draws Movie night's own windows on Windows: the popcorn menu
-// that opens from the tray icon, and the overlay in the corner of the shared
-// screen (who's watching, emojis thrown by friends, short notes). They are
-// painted in the viewer page's colors, never take focus from the movie, and
-// are left out of the screen capture, so friends never see them.
+// Package ui draws Movie night's own windows: the popcorn menu that opens
+// from the tray icon (Windows and Linux), and on Windows the overlay in the
+// corner of the shared screen (who's watching, emojis thrown by friends,
+// short notes). They are painted in the viewer page's colors and never take
+// focus from the movie; on Windows they are left out of the screen capture,
+// so friends never see them. X11 can't do that, so Linux has no overlay and
+// Toast is a desktop notification.
 //
-// Other systems keep the system menu: Supported reports false, Toast is a
-// desktop notification and the rest do nothing. X11 can't leave a window out
-// of the capture, so an overlay there would be streamed to friends.
+// Other systems keep the system menu: Supported reports false and the
+// functions do nothing.
 package ui
 
 import "time"

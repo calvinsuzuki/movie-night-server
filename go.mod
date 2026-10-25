@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	fyne.io/systray v1.12.2
+	github.com/ebitengine/purego v0.11.2
 	github.com/go-ole/go-ole v1.3.0
 	github.com/moutend/go-wca v0.3.0
 	github.com/pion/ice/v4 v4.4.7
