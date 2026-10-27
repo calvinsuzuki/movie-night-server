@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"golang.org/x/net/websocket"
 )
 
 // Handler serves everything a viewer needs, all under /s/<token>/ so that a
@@ -26,6 +28,7 @@ import (
 //	DELETE /s/{token}/join/{ticket}    withdraw the request
 //	POST   /s/{token}/whep             SDP offer (X-Ticket header) → answer
 //	DELETE /s/{token}/whep/{id}        leave
+//	GET    /s/{token}/cast?ticket=     WebSocket: the stream as MP4 fragments, when no direct path exists
 //	GET    /s/{token}/watchers         who's watching (?ticket=, long-poll with ?since=)
 //	POST   /s/{token}/throw            {ticket, emoji}: throw it at everyone's screen
 //	GET    /s/{token}/throws           throws to animate (?ticket=, long-poll with ?since=)
@@ -236,6 +239,52 @@ func Handler(h *Hub, l *Lobby, rx *Reactions, host string, page fs.FS, extra map
 		w.Header().Set("Location", r.URL.Path+"/"+id)
 		w.WriteHeader(http.StatusCreated)
 		io.WriteString(w, answer)
+	})
+	// Friends no direct path reaches (strict NAT on both sides) get the
+	// stream through the link instead: slower, but it always gets through.
+	mux.HandleFunc("GET /s/{token}/cast", func(w http.ResponseWriter, r *http.Request) {
+		if !validToken(w, r, l) {
+			return
+		}
+		ticket := r.URL.Query().Get("ticket")
+		who, err := l.Use(ticket)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		started := false
+		websocket.Server{Handler: func(ws *websocket.Conn) {
+			started = true
+			ws.PayloadType = websocket.BinaryFrame
+			id, v := h.Watch(who.Name)
+			l.Attach(ticket, id)
+			log.Printf("viewer %s (%s) watching through the link from %s (no direct path; a bit more delay)", id, who.Name, who.IP)
+			go func() {
+				io.Copy(io.Discard, ws) // returns when the page goes away
+				h.Remove(id)
+			}()
+			defer h.Remove(id)
+			defer ws.Close()
+			keepalive := time.NewTicker(20 * time.Second) // idle tunnels drop the connection
+			defer keepalive.Stop()
+			for {
+				var msg []byte
+				select {
+				case msg = <-v.out:
+				case <-keepalive.C:
+					msg = []byte{'k'}
+				case <-v.done:
+					return
+				}
+				ws.SetWriteDeadline(time.Now().Add(15 * time.Second))
+				if _, err := ws.Write(msg); err != nil {
+					return
+				}
+			}
+		}}.ServeHTTP(w, r)
+		if !started {
+			l.Release(ticket)
+		}
 	})
 	mux.HandleFunc("DELETE /s/{token}/whep/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !validToken(w, r, l) {

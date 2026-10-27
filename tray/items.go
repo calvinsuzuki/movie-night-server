@@ -73,7 +73,7 @@ func (m *menu) items() []ui.Item {
 			items = append(items, ui.Item{Kind: ui.Note, ID: "nobody", Label: "Nobody yet. Send your friends the invite link."})
 		}
 		for _, v := range st.Viewers {
-			items = append(items, ui.Item{Kind: ui.Viewer, ID: "viewer " + v.ID, Label: v.Name, Detail: since(v.Since),
+			items = append(items, ui.Item{Kind: ui.Viewer, ID: "viewer " + v.ID, Label: v.Name, Detail: watched(v),
 				OnClick: func() { m.a.Kick(v.ID) }, KeepOpen: true})
 		}
 	}

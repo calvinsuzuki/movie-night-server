@@ -122,13 +122,15 @@
   </div>
 
   <h2><span class="num">5</span> If a friend can't connect</h2>
-  <p>Most home and mobile connections work directly, over IPv4 or IPv6. Some (a VPN, strict office or school Wi-Fi, a few
-    mobile carriers and internet providers without IPv6) block direct connections, and the friend sees
-    <em>"Couldn't reach the host directly"</em>. First ask them to <strong>turn off any VPN</strong> and try again.
-    <strong>Open log</strong> in the popcorn menu shows what their browser offered.</p>
+  <p>Most home and mobile connections work directly, over IPv4 or IPv6. Movie night also asks your router to open its
+    port (UPnP), which lets in friends on mobile data. When there's still no direct path (a VPN, strict office or school
+    Wi-Fi, or strict carrier NAT on both ends), the friend watches <strong>through the link</strong> instead: it just works,
+    about a second behind, and shows <em>"via link"</em> in their quality badge and your menu. To get them the direct stream,
+    ask them to <strong>turn off any VPN</strong>, or turn on UPnP in your router. <strong>Open log</strong> in the popcorn
+    menu shows what happened.</p>
   <div class="card">
     <h3>Add a relay server (TURN)</h3>
-    <p>A relay passes the video along for those friends. Set one up once:</p>
+    <p>A relay keeps those friends on the direct, low-delay stream. Set one up once:</p>
     <ol>
       <li>Get relay details: either a Cloudflare <strong>TURN key</strong> (Cloudflare dashboard → Realtime → TURN;
         free allowance, then pay per GB) or your own <a href="https://github.com/coturn/coturn">coturn</a> server.</li>

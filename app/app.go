@@ -344,6 +344,7 @@ func (a *App) StartSharing() {
 			a.setStatus(err.Error())
 		}
 		go a.keepICEFresh(ctx)
+		go a.keepPortOpen(ctx, cfg.ICEPort)
 		go checkNetwork(cfg.ICEPort)
 		a.startTunnel(ctx, local)
 	}

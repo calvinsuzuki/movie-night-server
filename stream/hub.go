@@ -46,6 +46,7 @@ func IsTailnet(ip net.IP) bool {
 type Viewer struct {
 	ID, Name string
 	Since    time.Time // when the video started flowing
+	Tunnel   bool      // watching through the link: no direct path existed
 }
 
 type peer struct {
@@ -68,9 +69,15 @@ type ICEConfig struct {
 type Hub struct {
 	video, audio *webrtc.TrackLocalStaticRTP
 
-	mu    sync.Mutex
-	api   *webrtc.API
-	mux   io.Closer // the ICE socket(s)
+	mu  sync.Mutex
+	api *webrtc.API
+	mux io.Closer // the ICE socket(s)
+	// What api was built from, to rebuild it when the router opens a port.
+	se    webrtc.SettingEngine
+	media *webrtc.MediaEngine
+	reg   *interceptor.Registry
+	cast  *cast // the stream for viewers who couldn't connect directly
+	casts map[string]*castViewer
 	ice   ICEConfig
 	peers map[string]*peer
 	ver   uint64        // bumps whenever someone starts or stops watching
@@ -84,7 +91,7 @@ type Hub struct {
 
 // NewHub creates the shared video/audio tracks. Call Listen before Answer.
 func NewHub() (*Hub, error) {
-	h := &Hub{peers: map[string]*peer{}, verCh: make(chan struct{})}
+	h := &Hub{peers: map[string]*peer{}, casts: map[string]*castViewer{}, verCh: make(chan struct{}), cast: newCast()}
 	var err error
 	// Constrained baseline: the profile every browser (incl. iOS) hardware-decodes.
 	h.video, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
@@ -154,9 +161,28 @@ func (h *Hub) Listen(only net.IP, icePort int) error {
 	se.SetICEUDPMux(mux)
 
 	h.mu.Lock()
-	h.mux = mux
+	h.mux, h.se, h.media, h.reg = mux, se, m, reg
 	h.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(reg), webrtc.WithSettingEngine(se))
 	h.mu.Unlock()
+	return nil
+}
+
+// Advertise also offers public:port to viewers joining from now on, for when
+// the router forwards the ICE port from its public address to local.
+func (h *Hub) Advertise(local, public net.IP) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.mux == nil {
+		return errors.New("not listening")
+	}
+	se := h.se
+	if err := se.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+		External: []string{public.String()}, Local: local.String(),
+		AsCandidateType: webrtc.ICECandidateTypeHost, Mode: webrtc.ICEAddressRewriteAppend,
+	}); err != nil {
+		return err
+	}
+	h.api = webrtc.NewAPI(webrtc.WithMediaEngine(h.media), webrtc.WithInterceptorRegistry(h.reg), webrtc.WithSettingEngine(se))
 	return nil
 }
 
@@ -237,6 +263,7 @@ func (h *Hub) Forward(ctx context.Context, port int, kind string) error {
 			continue
 		}
 		rw.rewrite(pkt)
+		h.cast.write(kind, pkt)
 		if err := track.WriteRTP(pkt); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 			log.Printf("[%s] forward: %v", kind, err)
 		}
@@ -372,10 +399,36 @@ func (h *Hub) Answer(offerSDP, name string) (id, answerSDP string, err error) {
 	return id, pc.LocalDescription().SDP, nil
 }
 
+// Watch adds a viewer who couldn't connect directly: their stream goes
+// through the link (see cast). It ends when they leave or Remove is called.
+func (h *Hub) Watch(name string) (string, *castViewer) {
+	v := &castViewer{name: name, since: time.Now(), out: make(chan []byte, 600), done: make(chan struct{})}
+	id := newID()
+	h.mu.Lock()
+	h.casts[id] = v
+	h.bump()
+	h.mu.Unlock()
+	h.cast.subscribe(v)
+	if h.OnViewers != nil {
+		h.OnViewers()
+	}
+	return id, v
+}
+
 // Remove closes a viewer's connection completely and reports whether the
 // viewer existed.
 func (h *Hub) Remove(id string) bool {
 	h.mu.Lock()
+	if c, ok := h.casts[id]; ok {
+		delete(h.casts, id)
+		h.bump()
+		h.mu.Unlock()
+		h.cast.unsubscribe(c)
+		c.stop()
+		log.Printf("viewer %s (%s) left (%d watching)", id, c.name, h.Count())
+		h.left(id)
+		return true
+	}
 	p, ok := h.peers[id]
 	delete(h.peers, id)
 	if ok && p.dropTimer != nil {
@@ -395,13 +448,17 @@ func (h *Hub) Remove(id string) bool {
 	}
 	p.pc.Close()
 	log.Printf("viewer %s (%s) left (%d watching)", id, p.name, h.Count())
+	h.left(id)
+	return true
+}
+
+func (h *Hub) left(id string) {
 	if h.OnLeave != nil {
 		h.OnLeave(id)
 	}
 	if h.OnViewers != nil {
 		h.OnViewers()
 	}
-	return true
 }
 
 // Viewers lists the connected viewers, longest-watching first.
@@ -413,6 +470,9 @@ func (h *Hub) Viewers() []Viewer {
 		if p.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
 			vs = append(vs, Viewer{ID: id, Name: p.name, Since: p.connected})
 		}
+	}
+	for id, c := range h.casts {
+		vs = append(vs, Viewer{ID: id, Name: c.name, Since: c.since, Tunnel: true})
 	}
 	sort.Slice(vs, func(i, j int) bool { return vs[i].Since.Before(vs[j].Since) })
 	return vs
@@ -449,8 +509,11 @@ func (h *Hub) Count() int { return len(h.Viewers()) }
 // CloseAll disconnects every viewer.
 func (h *Hub) CloseAll() {
 	h.mu.Lock()
-	ids := make([]string, 0, len(h.peers))
+	ids := make([]string, 0, len(h.peers)+len(h.casts))
 	for id := range h.peers {
+		ids = append(ids, id)
+	}
+	for id := range h.casts {
 		ids = append(ids, id)
 	}
 	h.mu.Unlock()

@@ -6,12 +6,16 @@ require (
 	fyne.io/systray v1.12.2
 	github.com/ebitengine/purego v0.11.2
 	github.com/go-ole/go-ole v1.3.0
+	github.com/huin/goupnp v1.3.0
+	github.com/jackpal/gateway v1.2.0
+	github.com/jackpal/go-nat-pmp v1.1.0
 	github.com/moutend/go-wca v0.3.0
 	github.com/pion/ice/v4 v4.4.7
 	github.com/pion/interceptor v0.1.49
 	github.com/pion/rtp v1.10.5
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/webrtc/v4 v4.2.24
+	golang.org/x/net v0.50.0
 	golang.org/x/sys v0.41.0
 )
 
@@ -31,6 +35,6 @@ require (
 	github.com/pion/turn/v5 v5.1.2 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
 	golang.org/x/time v0.14.0 // indirect
 )

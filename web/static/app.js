@@ -32,7 +32,9 @@ function applyVolume() {
   const g = muted ? 0 : Math.pow(volume / 100, 2); // perceptual curve
   if (fxGain) fxGain.gain.value = g;
   if (gain) gain.gain.value = g;
-  else { video.volume = Math.min(1, g); video.muted = muted || !joined; }
+  // Through the link the sound plays from the element itself (iOS still
+  // ignores its volume there, but mute works).
+  if (!gain || (pc && pc.cast)) { video.volume = Math.min(1, g); video.muted = muted || !joined; }
   vol.value = volume;
   vol.style.setProperty('--fill', `${muted ? 0 : volume}%`);
   volLabel.textContent = muted ? 'muted' : `${volume}%`;
@@ -163,6 +165,7 @@ async function connect(mine) {
     (cfg.sounds || []).forEach(loadEffect); // so the first throw isn't silent
   } catch { /* STUN-less still works on a LAN */ }
   if (mine !== askToken) return;
+  if (viaLink) return watchViaLink(mine); // no direct path last time either
 
   const conn = new RTCPeerConnection({ iceServers: iceServers.map((s) => ({ urls: s.urls, username: s.username, credential: s.credential })) });
   pc = conn;
@@ -208,6 +211,9 @@ async function connect(mine) {
     if (!res.ok) throw new Error(`the host said ${res.status}`);
     resource = res.headers.get('Location');
     await conn.setRemoteDescription({ type: 'answer', sdp: enableStereo(await res.text()) });
+    // A direct path connects within a second or two; browsers take ~15 s to
+    // give up on a hopeless one, so don't wait for that.
+    setTimeout(() => { if (conn === pc && !everConnected) lost(false); }, 8000);
   } catch (err) {
     console.error(err);
     if (conn === pc) { teardown(); notice(`Couldn't start the stream (${err.message}).`); }
@@ -229,12 +235,24 @@ async function lost(everConnected) {
   const mine = askToken, conn = pc;
   if (!conn || conn.lost) return; // "failed" can follow "disconnected" while we report
   conn.lost = true;
-  await report(conn, everConnected ? 'dropped' : 'never connected');
+  if (!conn.cast) await report(conn, everConnected ? 'dropped' : 'never connected');
   if (mine !== askToken) return;
-  teardown();
-  if (!everConnected) {
-    return notice("Couldn't reach the host directly. Their network (or yours) blocks direct connections; ask them to set up a relay server in Movie night.");
+  if (!everConnected && !conn.cast) {
+    // No direct path between our networks: watch through the link instead.
+    // Let go of the direct attempt first, so the host frees our ticket.
+    const r = resource;
+    resource = null;
+    if (r) await fetch(r, { method: 'DELETE' }).catch(() => {});
+    if (mine !== askToken) return;
+    teardown();
+    if (!castSupported()) {
+      return notice("Couldn't reach the host directly, and this browser can't play the stream another way. Try a newer browser, or another network.");
+    }
+    viaLink = true;
+    return watchViaLink(mine);
   }
+  teardown();
+  if (!everConnected) return notice("Couldn't get the stream through the link either. Try again in a moment.");
   // Wait for the host's side to let go of the old connection too.
   const state = await ticketState('watching');
   if (mine !== askToken) return;
@@ -284,6 +302,182 @@ async function watchTicket(conn) {
     if (st === 'kicked' || st === 'stopped') { teardown(); return ended(st); }
     if (st !== 'watching') return; // left: the connection handler takes over
   }
+}
+
+// --- Watching through the link -------------------------------------------
+
+// When no direct path exists (strict NAT on both ends, as on most mobile
+// data), the host sends the stream through the link itself: MP4 pieces over
+// a WebSocket, played with Media Source Extensions. A bit more delay, but it
+// gets through wherever the page loads.
+const MS = window.ManagedMediaSource || window.MediaSource;
+let viaLink = false; // fell back once: reconnects go straight to the link
+
+function castSupported() {
+  return !!(MS && window.WebSocket && MS.isTypeSupported('video/mp4; codecs="avc1.42e01f"'));
+}
+
+function watchViaLink(mine, tries = 0) {
+  if (mine !== askToken) return;
+  waiting('No direct path to the host. Getting the stream through the link…');
+  setState('connecting', 'warn');
+  const url = new URL(`${base}cast?ticket=${encodeURIComponent(ticket)}`, location.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  const ms = new MS();
+  const src = URL.createObjectURL(ms);
+  const queue = []; // messages that arrived before the MediaSource opened
+  let open = false, audio = false, audioInit = null, vsb = null, asb = null, feedVideo = null, feedAudio = null, timer = null;
+  const session = {
+    cast: true, connectionState: 'connecting', bytes: 0, delay: 0,
+    close() {
+      clearInterval(timer);
+      ws.onclose = ws.onmessage = null;
+      ws.close();
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(src);
+    },
+  };
+  pc = session;
+  castLast = null;
+  video.srcObject = null;
+  video.disableRemotePlayback = true; // ManagedMediaSource (iPhone) needs it
+  video.src = src;
+
+  // A SourceBuffer takes one append at a time; what piles up meanwhile goes
+  // in as one piece.
+  function feeder(sb) {
+    const pending = [];
+    const next = () => {
+      if (sb.updating || !pending.length || ms.readyState !== 'open') return;
+      let n = 0;
+      for (const p of pending) n += p.length;
+      const all = new Uint8Array(n);
+      n = 0;
+      for (const p of pending) { all.set(p, n); n += p.length; }
+      pending.length = 0;
+      try { sb.appendBuffer(all); } catch (err) {
+        if (err.name === 'QuotaExceededError' && video.currentTime > 5) sb.remove(0, video.currentTime - 2);
+      }
+    };
+    sb.addEventListener('updateend', next);
+    return (bytes) => { pending.push(bytes); next(); };
+  }
+
+  function handle(m) {
+    const kind = String.fromCharCode(m[0]);
+    if (kind === 'H') { audio = m[1] === 1; return; }
+    if (kind === 'V' || kind === 'A') {
+      const codec = new TextDecoder().decode(m.subarray(2, 2 + m[1]));
+      const seg = m.subarray(2 + m[1]);
+      if (kind === 'A') {
+        if (!audio) return;
+        if (feedAudio) return void feedAudio(seg);
+        audioInit = { codec, seg }; // set up together with the video, below
+        return;
+      }
+      if (!vsb) {
+        // Browsers take no new SourceBuffer once one has data: add both first.
+        vsb = ms.addSourceBuffer(`video/mp4; codecs="${codec}"`);
+        feedVideo = feeder(vsb);
+        const a = audioInit && `audio/mp4; codecs="${audioInit.codec}"`;
+        if (a && MS.isTypeSupported(a)) { asb = ms.addSourceBuffer(a); feedAudio = feeder(asb); feedAudio(audioInit.seg); }
+      }
+      feedVideo(seg);
+      return;
+    }
+    if (kind === 'v' && feedVideo) {
+      feedVideo(m.subarray(1));
+      if (session.connectionState !== 'connected') started();
+    }
+    if (kind === 'a') {
+      if (feedAudio) feedAudio(m.subarray(1));
+      else if (!audio) restart(); // the host turned sound on: start over with it
+    }
+  }
+
+  function started() {
+    session.connectionState = 'connected';
+    watched = true;
+    watchTicket(session); watchWatchers(session); watchThrows(session);
+    setState('live', 'live');
+    show(null);
+    applyVolume();
+    play();
+  }
+
+  // Start over with a fresh MediaSource when the stream changed under us.
+  // The host frees our ticket when the old WebSocket closes, so wait a moment.
+  function restart() {
+    if (session !== pc) return;
+    teardown();
+    setTimeout(() => watchViaLink(mine), 1000);
+  }
+
+  ms.addEventListener('sourceopen', () => {
+    open = true;
+    for (const m of queue.splice(0)) handle(m);
+  });
+  ws.onmessage = (e) => {
+    if (session !== pc) return;
+    const m = new Uint8Array(e.data);
+    session.bytes += m.length;
+    if (!open) return void queue.push(m);
+    try { handle(m); } catch (err) { console.error(err); restart(); }
+  };
+  ws.onclose = () => {
+    if (session !== pc) return;
+    if (!session.bytes && tries < 3) { // the host may still be letting go of our last try
+      teardown();
+      return void setTimeout(() => watchViaLink(mine, tries + 1), 1000);
+    }
+    lost(session.connectionState === 'connected');
+  };
+
+  // Stay near the live edge, forget what's been played, and start over if
+  // the picture is stuck while data keeps arriving (e.g. the sound stopped).
+  let lastTime = -1, stuckSince = 0;
+  timer = setInterval(() => {
+    const b = video.buffered;
+    if (!b.length || session.connectionState !== 'connected') return;
+    const start = b.start(b.length - 1), end = b.end(b.length - 1), now = performance.now();
+    session.delay = end - video.currentTime;
+    if (video.currentTime < start || session.delay > 1.5) video.currentTime = Math.max(start, end - 0.4);
+    if (video.paused && $('tapToPlay').hidden) play();
+    if (video.currentTime === lastTime && session.delay > 1) {
+      if (!stuckSince) stuckSince = now;
+      else if (now - stuckSince > 4000) restart();
+    } else stuckSince = 0;
+    lastTime = video.currentTime;
+    for (const sb of [vsb, asb]) {
+      if (sb && !sb.updating && sb.buffered.length && video.currentTime - sb.buffered.start(0) > 30) {
+        try { sb.remove(0, video.currentTime - 10); } catch { /* busy: next time */ }
+      }
+    }
+  }, 500);
+}
+
+let castLast = null;
+function castStats(s) {
+  const now = performance.now();
+  const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+  const frames = q ? q.totalVideoFrames : 0;
+  const kbps = castLast ? ((s.bytes - castLast.bytes) * 8) / (now - castLast.t) : 0;
+  const fps = castLast ? ((frames - castLast.frames) * 1000) / (now - castLast.t) : 0;
+  castLast = { t: now, bytes: s.bytes, frames };
+  renderQuality({ frameWidth: video.videoWidth, frameHeight: video.videoHeight, framesPerSecond: fps }, kbps, null);
+  $('qPing').textContent = 'via link';
+  qualityEl.className = 'ok';
+  if (statsEl.hidden) return;
+  statsEl.textContent = [
+    `video   ${video.videoWidth || '?'}x${video.videoHeight || '?'} @ ${Math.round(fps)} fps`,
+    `bitrate ${(kbps / 1000).toFixed(2)} Mbps`,
+    `delay   ${Math.round(s.delay * 1000)} ms buffered`,
+    'path    through the link (no direct path between your networks)',
+    `dropped ${q ? q.droppedVideoFrames : 0} frames`,
+  ].join('\n');
 }
 
 // --- Who's watching --------------------------------------------------------
@@ -567,7 +761,7 @@ function unlockAudio() {
     loadEffect('join-sound.wav');
   }
   if (fx) fx.resume();
-  if (!video.srcObject) video.srcObject = new MediaStream();
+  if (!video.srcObject && !video.getAttribute('src')) video.srcObject = new MediaStream();
   video.play().catch(() => {});
   applyVolume();
 }
@@ -641,6 +835,7 @@ function renderQuality(v, kbps, rttMs) {
 }
 
 async function updateStats() {
+  if (pc && pc.cast && pc.connectionState === 'connected') return castStats(pc);
   if (!pc || pc.connectionState !== 'connected') {
     qualityEl.hidden = true;
     last = null;

@@ -13,7 +13,7 @@ import (
 
 // checkNetwork logs what kind of network the sharer is on, which explains
 // most "a friend can't connect" reports:
-//   - whether UDP gets out at all (if not, video can't flow without a relay);
+//   - whether UDP gets out at all (if not, friends watch through the link);
 //   - whether the IPv4 NAT keeps one public port for every destination
 //     (friendly: direct connections usually work) or picks a new one per
 //     destination (strict, "symmetric": friends behind strict NAT or on
@@ -43,7 +43,7 @@ func checkIPv4() string {
 	local := conn.LocalAddr().(*net.UDPAddr).Port
 	switch {
 	case errA != nil && errB != nil:
-		return fmt.Sprintf("IPv4: no STUN server answered (%v): outgoing UDP looks blocked (firewall, antivirus or VPN), so friends can only connect through a relay", errA)
+		return fmt.Sprintf("IPv4: no STUN server answered (%v): outgoing UDP looks blocked (firewall, antivirus or VPN), so friends will watch through the link (a bit more delay) unless you set up a relay", errA)
 	case errA != nil || errB != nil:
 		if a == nil {
 			a = b
@@ -52,15 +52,15 @@ func checkIPv4() string {
 	case isLocalIP(a.IP):
 		return fmt.Sprintf("IPv4: public address %s right on this PC (no NAT): friends can reach you directly", a.IP)
 	case !a.IP.Equal(b.IP):
-		return fmt.Sprintf("IPv4: strict NAT, a different public address per destination (%s and %s; carrier-grade NAT?): friends behind strict NAT or on mobile data can't connect directly, they need IPv6 or a relay", a.IP, b.IP)
+		return fmt.Sprintf("IPv4: strict NAT, a different public address per destination (%s and %s; carrier-grade NAT?): friends behind strict NAT or on mobile data can't connect directly and will watch through the link (a bit more delay)", a.IP, b.IP)
 	case a.Port != b.Port:
-		return fmt.Sprintf("IPv4: strict (symmetric) NAT, public address %s but the port changes per destination (%d and %d): friends behind strict NAT or on mobile data can't connect directly, they need IPv6 or a relay", a.IP, a.Port, b.Port)
+		return fmt.Sprintf("IPv4: strict (symmetric) NAT, public address %s but the port changes per destination (%d and %d): friends behind strict NAT or on mobile data can't connect directly unless the router opens a port, otherwise they watch through the link", a.IP, a.Port, b.Port)
 	default:
 		kept := ""
 		if a.Port == local {
 			kept = ", port kept"
 		}
-		return fmt.Sprintf("IPv4: public address %s behind a friendly NAT (same public port %d for every destination%s): direct connections usually work", a.IP, a.Port, kept)
+		return fmt.Sprintf("IPv4: public address %s behind a friendly NAT (same public port %d for every destination%s): direct connections usually work, though friends on mobile data also need the router to open a port", a.IP, a.Port, kept)
 	}
 }
 
@@ -73,7 +73,7 @@ func checkIPv6() string {
 		}
 	}
 	if len(global) == 0 {
-		return "IPv6: no public IPv6 address on this PC, so everyone connects over IPv4"
+		return "IPv6: no public IPv6 address on this PC (your provider or router doesn't hand one out), so everyone connects over IPv4"
 	}
 	conn, err := net.ListenUDP("udp6", nil)
 	if err != nil {

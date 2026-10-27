@@ -670,7 +670,7 @@ func (m *menu) refreshNative(st app.State) {
 	for i, item := range m.viewerItems {
 		if i < len(st.Viewers) {
 			v := st.Viewers[i]
-			setTitle(item, fmt.Sprintf("%s · %s — Kick", v.Name, since(v.Since)))
+			setTitle(item, fmt.Sprintf("%s · %s — Kick", v.Name, watched(v)))
 			setVisible(item, true)
 			m.viewers = append(m.viewers, v.ID)
 		} else {
@@ -783,6 +783,15 @@ func since(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dh%02d", int(d.Hours()), int(d.Minutes())%60)
 	}
+}
+
+// watched is how long a friend has been watching, and whether through the
+// link because no direct path reached them.
+func watched(v stream.Viewer) string {
+	if v.Tunnel {
+		return since(v.Since) + " · via link"
+	}
+	return since(v.Since)
 }
 
 // OpenGuide shows the "How it works" page in the default browser.

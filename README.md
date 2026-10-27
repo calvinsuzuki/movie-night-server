@@ -53,7 +53,7 @@
 3. Each friend types a name and knocks, and you get a popup: *"Alice wants to watch the movie. Let them in?"*
 4. They watch in **any browser**: Windows, Mac, Linux, Android, iPhone or iPad. Nothing to install, and everyone sets their own volume.
 
-The picture and sound travel **directly from your PC to each friend**, encrypted, at 24 fps and up to 1080p, with well under a second of delay.
+The picture and sound travel **directly from your PC to each friend**, encrypted, at 24 fps and up to 1080p, with well under a second of delay. When no direct path exists (strict NAT on both ends, common on mobile data), the stream comes through the link instead, with a little more delay.
 
 <div align="center">
 
@@ -80,7 +80,8 @@ The picture and sound travel **directly from your PC to each friend**, encrypted
 | 🎞️ | **Quality presets** | 480p, 720p or 1080p at 24 fps, plus an advanced bitrate picker from 500 kbps to 8 Mbps. |
 | ⚡ | **Low delay** | WebRTC peer-to-peer, typically 0.2–0.5 s behind your screen. |
 | 🛰️ | **IPv4 and IPv6** | Connects over IPv6 when both sides have it, which gets around strict carrier NAT. |
-| 🛟 | **Optional relay** | Add a TURN server for the rare networks that block direct connections, and optionally hide your IP. |
+| 🔀 | **Always gets through** | Asks your router to open its port (UPnP / NAT-PMP) so friends on mobile data can connect directly. If no direct path exists anyway, the stream comes through the link instead (about a second behind). |
+| 🛟 | **Optional relay** | Add a TURN server to keep those friends on the low-delay direct stream, and optionally hide your IP. |
 | 🎯 | **Throw emojis at the screen** | Tap the 🍿 above the watcher count and it flies at everyone's screen with your name, a whoosh and, 0.3–0.8 s later, a smack. The little ˄ arrow on the button picks what you throw: 🍿😆😤🤮😭🤭🌚👋👌🤌👊👏💩👀. |
 | 📶 | **Quality and ping on screen** | The top-right corner shows the resolution, frame rate, bitrate and your ping to the host, with a green, butter or red dot. |
 | 🍿 | **Lives in your tray** | No windows to manage, just a popcorn bucket by the clock. A blue dot means someone's knocking. Its menu is dressed like the viewer page. |
@@ -119,7 +120,10 @@ Friend's browser ── HTTPS ──► trycloudflare.com ──► cloudflared 
    (viewer page, "can I join?", WebRTC handshake)
 
 Friend's browser ◄══ WebRTC: H.264 + Opus, encrypted, peer-to-peer ══ Movie night (UDP 8443, IPv4 + IPv6)
-                     found via STUN; through a TURN relay only when a direct path is impossible
+                     found via STUN (+ a router port opened by UPnP / NAT-PMP); through a TURN relay if you set one up
+
+Friend's browser ◄── fragmented MP4 over a WebSocket, through the link ── Movie night
+                     only when no direct path exists (same packets, repackaged, not re-encoded)
 
 ffmpeg: screen (ddagrab / x11grab) → H.264 ─RTP→ ┐
 per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (no re-encoding)
@@ -129,7 +133,8 @@ per-app sound → mixer → ffmpeg → Opus  ─RTP→ ┴→ Go/Pion fan-out (n
 - **🎟️ Join passes:** the viewer page waits for your answer. An allowed pass opens exactly one connection and is revoked when that connection ends. Each IP can make at most 3 requests a minute, and at most 5 people can wait at once.
 - **📡 The picture:** your screen is captured with the Desktop Duplication API (Windows) or X11 (Ubuntu). It's encoded once to H.264 (NVENC → QuickSync → AMF → x264, picked automatically), and each packet is copied to every viewer without re-encoding.
 - **🔊 The sound:** on Windows, each allowed app is recorded with WASAPI *process loopback* and the streams are mixed. On Ubuntu, each allowed app's PulseAudio stream is recorded on its own with `parec --monitor-stream`, so your speakers are left untouched.
-- **🧭 Finding a path:** each side learns its public address from public STUN servers, and the browser connects directly over IPv4 or IPv6. *Open log* records which path each friend used.
+- **🧭 Finding a path:** each side learns its public address from public STUN servers, and the browser connects directly over IPv4 or IPv6. Movie night also asks your router to forward UDP 8443 (UPnP or NAT-PMP), which lets in friends whose own network is strict. *Open log* records which path each friend used.
+- **🔀 Through the link:** when a friend's browser finds no direct path within 8 seconds, it asks for the stream through the link: the same H.264 and Opus, repackaged as MP4 pieces and played with Media Source Extensions. It adds about a second of delay. It's protected by HTTPS to Cloudflare and back, but unlike WebRTC it isn't end-to-end encrypted: Cloudflare could see it.
 - **🧹 Clean exits:** ffmpeg and cloudflared always close with Movie night, even after a crash. Alert sounds play only on your speakers and are never shared.
 - **📶 Upload:** you send one copy of the stream per friend, about 5 Mbps each at 1080p.
 
@@ -222,7 +227,7 @@ Settings are saved automatically in `%APPDATA%\MovieNight\config.json` (Windows)
 <summary><b>🛟 Adding a relay server (TURN)</b></summary>
 <br>
 
-Most friends connect directly. A VPN, strict office or school Wi-Fi, or a few providers' networks block direct connections, and a relay passes the video along for those friends only.
+Most friends connect directly, and the rest watch through the link. A relay keeps those friends on the direct, low-delay WebRTC stream instead, and lets you hide your IP.
 
 ```jsonc
 // Cloudflare Realtime TURN (dashboard → Realtime → TURN)
@@ -256,15 +261,18 @@ Edit it and rebuild. To add your own sound, drop a `throw-*.mp3` or `hit-*.mp3` 
 ## 🛟 Troubleshooting
 
 <details>
-<summary><b>😕 A friend sees "Couldn't reach the host directly"</b></summary>
+<summary><b>😕 A friend watches "via link", or can't connect at all</b></summary>
 <br>
+
+"via link" (in their quality badge and your tray menu) means no direct path was found, so the stream comes through the link with a little more delay. It still works; to get the direct stream back:
 
 1. **VPN?** Ask them to turn it off and try again. VPNs usually block direct video.
 2. **Check their IPv6** at [test-ipv6.com](https://test-ipv6.com). If their phone works on the same Wi-Fi but their PC doesn't, the PC probably has IPv6 switched off:
    - Press **Win + R**, run `ncpa.cpl`, open the adapter's **Properties**, and tick **Internet Protocol Version 6**.
    - If that doesn't do it, an optimizer or VPN tool may have disabled IPv6 system-wide.
-3. **Still stuck?** Add a [relay server](#%EF%B8%8F-configuration), which handles every remaining case.
-4. **Advanced → Open log** explains every failed attempt:
+3. **Your router:** check the `router:` line in the log. If it couldn't open UDP 8443, turn on UPnP in the router's settings, or forward UDP 8443 to this PC by hand. If it says the router is behind your provider's NAT, only IPv6 or a relay helps.
+4. **Still stuck?** Add a [relay server](#%EF%B8%8F-configuration), which handles every remaining case. A friend whose browser is too old to play the stream through the link sees "Couldn't reach the host directly".
+5. **Advanced → Open log** explains every failed attempt:
    - `network check:` lines, each time you start sharing: whether UDP gets out at all, whether your router is a *friendly* NAT (one public port for everyone) or a *strict* one (a new port per destination, which friends on mobile data can't get through), and whether IPv6 works.
    - `the browser offered` / `we offered`: the addresses each side brought.
    - `connection checks:` for a friend who never connected: every pair of addresses tried, how many checks went out, and whether anything came back.
